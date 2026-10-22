@@ -432,6 +432,9 @@ public final class CoreTests {
 		assertTrue(VoWLANControlPolicy.allowed("POST", "/api/calls/answer"));
 		assertTrue(VoWLANControlPolicy.allowed("POST", "/api/calls/audio/host/register"));
 		assertTrue(VoWLANControlPolicy.allowed("POST", "/api/push/register"));
+		assertTrue(VoWLANControlPolicy.allowed("POST", "/api/push/mode"));
+		assertTrue(!VoWLANControlPolicy.allowed("GET", "/api/push/mode"));
+		assertTrue(!VoWLANControlPolicy.allowed("POST", "/api/push/mode/extra"));
 		assertTrue(VoWLANControlPolicy.allowed("GET", "/api/push/status"));
 		assertTrue(VoWLANControlPolicy.allowed("GET", "/api/sms"));
 		assertTrue(VoWLANControlPolicy.allowed("GET", "/api/sms/status"));

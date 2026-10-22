@@ -5,6 +5,9 @@ struct VoWLANEndpoint: Equatable, Hashable, Sendable {
     let host: String
     let controlPort: UInt16
     let pcmPort: UInt16
+    let usesTLS: Bool
+
+    var isManual: Bool { usesTLS }
 
     init(host: String, controlPort: UInt16, pcmPort: UInt16) throws {
         guard Self.isPrivateIPv4(host), controlPort >= 1024, pcmPort >= 1024 else {
@@ -13,9 +16,39 @@ struct VoWLANEndpoint: Equatable, Hashable, Sendable {
         self.host = host
         self.controlPort = controlPort
         self.pcmPort = pcmPort
+        self.usesTLS = false
     }
 
-    var controlBaseURL: URL { URL(string: "http://\(host):\(controlPort)/")! }
+    /// Explicit user configuration only; Bonjour remains restricted to private IPv4.
+    init(manualHost: String, controlPort: UInt16, pcmPort: UInt16) throws {
+        let host = manualHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard Self.isValidManualHost(host), controlPort > 0, pcmPort > 0,
+              controlPort != pcmPort else { throw VoWLANControllerError.invalidManualEndpoint }
+        self.host = host
+        self.controlPort = controlPort
+        self.pcmPort = pcmPort
+        self.usesTLS = true
+    }
+
+    static func isValidManualHost(_ host: String) -> Bool {
+        guard !host.isEmpty, host.count <= 253, host.allSatisfy({ $0.isASCII }) else { return false }
+        let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard labels.count >= 2 else { return false }
+        if host.allSatisfy({ $0.isNumber || $0 == "." }) {
+            return labels.count == 4 && labels.allSatisfy { part in
+                guard let octet = UInt8(part) else { return false }
+                return String(octet) == part
+            }
+        }
+        return labels.allSatisfy { label in
+            !label.isEmpty && label.count <= 63 && label.first != "-" && label.last != "-"
+                && label.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" }
+        }
+    }
+
+    var controlBaseURL: URL {
+        URL(string: "\(usesTLS ? "https" : "http")://\(host):\(controlPort)/")!
+    }
 
     private static func isPrivateIPv4(_ host: String) -> Bool {
         let fields = host.split(separator: ".").compactMap { UInt8($0) }
@@ -167,22 +200,52 @@ enum VoWLANStatusCopy {
         switch availability {
         case .unpaired: return "未配对"
         case .discovering: return "正在发现"
-        case .discovered: return "已发现，正在验证"
-        case .verified: return "VoWLAN 就绪"
+        case let .discovered(endpoint, _): return endpoint.isManual ? "远程直连正在验证" : "已发现，正在验证"
+        case let .verified(endpoint, _): return endpoint.isManual ? "远程直连就绪（TLS）" : "VoWLAN 就绪"
         case let .unavailable(reason):
             return reason.contains("局域网已断开") ? "局域网已断开 · 已回退云端（下一通）" : reason
         }
     }
 }
 
+/// Non-secret routing configuration. The paired HMAC secret stays in Keychain.
+enum ManualDirectConfiguration {
+    static let enabledKey = "airsim.direct.enabled"
+    static let hostKey = "airsim.direct.host"
+    static let controlKey = "airsim.direct.control-port"
+    static let pcmKey = "airsim.direct.pcm-port"
+
+    static func endpoint(defaults: UserDefaults = .standard) -> VoWLANEndpoint? {
+        guard defaults.bool(forKey: enabledKey),
+              let host = defaults.string(forKey: hostKey),
+              let control = UInt16(defaults.string(forKey: controlKey) ?? ""),
+              let pcm = UInt16(defaults.string(forKey: pcmKey) ?? "") else { return nil }
+        return try? VoWLANEndpoint(manualHost: host, controlPort: control, pcmPort: pcm)
+    }
+
+    static func save(host: String, control: String, pcm: String,
+                     defaults: UserDefaults = .standard) throws {
+        guard let controlPort = UInt16(control), let pcmPort = UInt16(pcm) else {
+            throw VoWLANControllerError.invalidManualEndpoint
+        }
+        let endpoint = try VoWLANEndpoint(manualHost: host, controlPort: controlPort, pcmPort: pcmPort)
+        defaults.set(endpoint.host, forKey: hostKey)
+        defaults.set(String(controlPort), forKey: controlKey)
+        defaults.set(String(pcmPort), forKey: pcmKey)
+        defaults.set(true, forKey: enabledKey)
+    }
+}
+
 enum VoWLANControllerError: LocalizedError {
     case invalidAdvertisement
+    case invalidManualEndpoint
     case notDiscovered
     case notPaired
     case authenticationFailed
 
     var errorDescription: String? {
         switch self {
+        case .invalidManualEndpoint: return "请输入域名或 IPv4 地址及两个不同的端口（1–65535），不要填写协议或路径"
         case .invalidAdvertisement: return "VoWLAN 广播内容无效"
         case .notDiscovered: return "尚未发现三星 VoWLAN"
         case .notPaired: return "VoWLAN 尚未配对"
@@ -293,6 +356,7 @@ final class VoWLANController: ObservableObject {
             availability = .unpaired
             return
         }
+        if activateManualEndpoint() { return }
         guard let generation = browserLifecycle.startIfNeeded() else { return }
         beginBrowsing(generation: generation)
     }
@@ -303,6 +367,7 @@ final class VoWLANController: ObservableObject {
             availability = .unpaired
             return
         }
+        if activateManualEndpoint() { return }
         let generation = browserLifecycle.restart()
         stopCurrentBrowser()
         discoveredEndpoint = nil
@@ -315,6 +380,28 @@ final class VoWLANController: ObservableObject {
                 fields: ["generation": String(generation)]
             )
         }
+    }
+
+    private func activateManualEndpoint() -> Bool {
+        guard UserDefaults.standard.bool(forKey: ManualDirectConfiguration.enabledKey) else { return false }
+        browserLifecycle.stop()
+        stopCurrentBrowser()
+        guard let endpoint = ManualDirectConfiguration.endpoint() else {
+            discoveredEndpoint = nil
+            discoveredAgents = []
+            availability = .unavailable("远程直连配置无效，请重新保存")
+            return true
+        }
+        if discoveredEndpoint != endpoint {
+            discoveredEndpoint = endpoint
+            discoveredAgents = [VoWLANDiscoveredAgent(
+                id: "manual-direct", endpoint: endpoint, deviceName: "远程直连 Android",
+                manufacturer: nil, model: nil, phoneNumber: nil, agentKind: nil
+            )]
+            availability = .discovered(endpoint, at: Date())
+            Task { await self.probeNow() }
+        }
+        return true
     }
 
     private func beginBrowsing(generation: UInt64) {
@@ -424,25 +511,26 @@ final class VoWLANController: ObservableObject {
             return
         }
         do {
-            let (data, response) = try await VoWLANProbeRecovery.run {
+            let (data, status) = try await VoWLANProbeRecovery.run {
                 let signed = try VoWLANRequestSigner(secret: credential.secret).sign(
                     method: "GET", path: "/v1/health", body: Data()
                 )
                 var request = URLRequest(url: endpoint.controlBaseURL.appendingPathComponent("v1/health"))
-                request.timeoutInterval = 3
+                request.timeoutInterval = endpoint.isManual ? 10 : 3
                 request.cachePolicy = .reloadIgnoringLocalCacheData
                 Self.apply(signed, to: &request)
-                let configuration = URLSessionConfiguration.ephemeral
-                configuration.waitsForConnectivity = false
-                let session = URLSession(configuration: configuration)
-                defer { session.finishTasksAndInvalidate() }
-                return try await session.data(for: request)
+                // The raw HTTP transport never follows redirects carrying signed headers.
+                let response = try await WiredHTTPTransport(
+                    policy: endpoint.isManual ? .remoteDirect : .vowlan
+                ).send(request)
+                return (response.body, response.statusCode)
             }
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+            guard status == 200,
                   let identity = try? JSONDecoder().decode(VoWLANHealthIdentity.self, from: data),
                   identity.ok else {
                 throw VoWLANControllerError.authenticationFailed
             }
+            guard discoveredEndpoint == endpoint else { return }
             if let index = discoveredAgents.firstIndex(where: { $0.endpoint == endpoint }) {
                 let previous = discoveredAgents[index]
                 discoveredAgents[index] = VoWLANDiscoveredAgent(
@@ -462,6 +550,7 @@ final class VoWLANController: ObservableObject {
                 fields: ["host": endpoint.host, "control_port": String(endpoint.controlPort)]
             )
         } catch {
+            guard discoveredEndpoint == endpoint else { return }
             availability = .unavailable(VoWLANProbeRecovery.userFacingMessage(for: error))
             await AgentVerboseTraceRecorder.shared.recordEvent(
                 source: "ios", category: "vowlan", phase: "failed",

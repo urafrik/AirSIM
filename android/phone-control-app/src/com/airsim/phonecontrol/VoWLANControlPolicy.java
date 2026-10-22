@@ -9,7 +9,7 @@ public final class VoWLANControlPolicy {
     private static final Set<String> POST_ROUTES = Set.of(
             "/api/calls/dial", "/api/calls/answer", "/api/calls/reject",
             "/api/calls/hangup", "/api/calls/dtmf", "/api/calls/audio/mute",
-            "/api/calls/audio/host/warmup", "/api/calls/audio/host/register", "/api/push/register",
+            "/api/calls/audio/host/warmup", "/api/calls/audio/host/register", "/api/push/register", "/api/push/mode",
 			"/api/sms/send", "/api/sms/ack", "/api/sms/refresh");
 
     private VoWLANControlPolicy() {}

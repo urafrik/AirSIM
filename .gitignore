@@ -28,3 +28,6 @@ push-relay-worker/.dev.vars*
 push-relay-worker/.env*
 module/module-agent/*.bin
 module/module-agent/*.tar.gz
+
+__pycache__/
+*.pyc

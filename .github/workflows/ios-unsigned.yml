@@ -1,0 +1,91 @@
+name: Build unsigned iPhone IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'iOS/**'
+      - '.github/workflows/ios-unsigned.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-unsigned-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      BUILD_DIR: ${{ runner.temp }}/airsim-ios
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode 26
+        shell: bash
+        run: |
+          set -euo pipefail
+          XCODE_APP=$(python3 - <<'PY'
+          import glob, re
+          apps = glob.glob('/Applications/Xcode_26*.app')
+          if not apps:
+              raise SystemExit('Xcode 26 is required for the existing Liquid Glass UI')
+          print(max(apps, key=lambda p: tuple(map(int, re.findall(r'\d+', p)))))
+          PY
+          )
+          sudo xcode-select --switch "$XCODE_APP/Contents/Developer"
+          mkdir -p "$BUILD_DIR"
+          xcodebuild -version | tee "$BUILD_DIR/xcode-version.txt"
+
+      - name: Archive for physical iPhone without signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -project iOS/AirSIM.xcodeproj \
+            -scheme AirSIM \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$BUILD_DIR/AirSIM.xcarchive" \
+            -derivedDataPath "$BUILD_DIR/DerivedData" \
+            -resultBundlePath "$BUILD_DIR/Archive.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY= \
+            DEVELOPMENT_TEAM= \
+            2>&1 | tee "$BUILD_DIR/archive.log"
+
+      - name: Package unsigned IPA with Watch and Live Activity
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 iOS/scripts/package_unsigned.py \
+            "$BUILD_DIR/AirSIM.xcarchive/Products/Applications/AirSIM.app" \
+            "$BUILD_DIR/artifacts"
+          cp "$BUILD_DIR/xcode-version.txt" "$BUILD_DIR/artifacts/"
+          printf '%s\n' "$GITHUB_SHA" > "$BUILD_DIR/artifacts/source-commit.txt"
+          cp iOS/SELF_SIGNING.md "$BUILD_DIR/artifacts/SELF_SIGNING.md"
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: AirSIM-iPhone-unsigned-${{ github.run_number }}
+          path: ${{ env.BUILD_DIR }}/artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AirSIM-iOS-build-log-${{ github.run_number }}
+          path: |
+            ${{ env.BUILD_DIR }}/archive.log
+            ${{ env.BUILD_DIR }}/xcode-version.txt
+          if-no-files-found: ignore
+          retention-days: 7

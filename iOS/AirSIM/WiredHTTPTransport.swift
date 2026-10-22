@@ -10,9 +10,10 @@ struct WiredHTTPResponse: Sendable {
 
 /// 使用 Network.framework 将模块控制请求固定到 USB ECM，避免 Wi-Fi 或 VPN 抢走私网路由。
 final class WiredHTTPTransport: @unchecked Sendable {
-    enum Policy: Sendable {
+    enum Policy: Equatable, Sendable {
         case moduleLocal
         case vowlan
+        case remoteDirect
     }
 
     private let queue = DispatchQueue(label: "com.jieden.airsim.wired-http", qos: .userInitiated)
@@ -33,9 +34,9 @@ final class WiredHTTPTransport: @unchecked Sendable {
 
     func send(_ request: URLRequest, uploadFileURL: URL? = nil) async throws -> WiredHTTPResponse {
         guard let url = request.url,
-              url.scheme?.lowercased() == "http",
+              url.scheme?.lowercased() == (policy == .remoteDirect ? "https" : "http"),
               let host = url.host,
-              let port = NWEndpoint.Port(rawValue: UInt16(url.port ?? 80)) else {
+              let port = NWEndpoint.Port(rawValue: UInt16(url.port ?? (policy == .remoteDirect ? 443 : 80))) else {
             throw WiredHTTPError.invalidRequest
         }
 
@@ -52,6 +53,10 @@ final class WiredHTTPTransport: @unchecked Sendable {
             body = .none
         }
 
+        if case .remoteDirect = policy {
+            return try await sendOnce(request, host: NWEndpoint.Host(host), port: port,
+                                      body: body, route: .any)
+        }
         if case .vowlan = policy {
             return try await sendOnce(
                 request,
@@ -206,11 +211,13 @@ enum ModuleUSBInterfaceResolver {
 }
 
 private enum WiredInterfaceRoute {
+    case any
     case exact(NWInterface)
     case type(NWInterface.InterfaceType)
 
     var description: String {
         switch self {
+        case .any: return "system route · TLS"
         case let .exact(interface): return "\(interface.name):\(interface.type)"
         case let .type(type): return String(describing: type)
         }
@@ -219,6 +226,7 @@ private enum WiredInterfaceRoute {
     func matches(_ path: NWPath?) -> Bool {
         guard let path else { return false }
         switch self {
+        case .any: return path.status == .satisfied
         case let .exact(interface):
             return path.availableInterfaces.contains { $0.name == interface.name }
         case let .type(type):
@@ -281,9 +289,10 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
         tcp.noDelay = true
         tcp.enableKeepalive = true
         tcp.keepaliveIdle = 5
-        let parameters = NWParameters(tls: nil, tcp: tcp)
+        let parameters = NWParameters(tls: request.url?.scheme == "https" ? NWProtocolTLS.Options() : nil, tcp: tcp)
         // 优先绑定实际 USB ECM 接口；找不到接口名时才按接口类型约束。
         switch route {
+        case .any: break
         case let .exact(interface): parameters.requiredInterface = interface
         case let .type(type): parameters.requiredInterfaceType = type
         }
@@ -327,7 +336,7 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
         connection.start(queue: queue)
 
         // 严格路径不匹配时连接可能一直 waiting；请求尚未发送，可安全交给上层决定是否回退。
-        queue.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+        queue.asyncAfter(deadline: .now() + (request.url?.scheme == "https" ? 10 : 1.5)) { [weak self] in
             guard let self, !self.finished, !self.requestStarted else { return }
             self.finish(.failure(WiredHTTPError.wiredPathUnavailable))
         }

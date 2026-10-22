@@ -314,7 +314,15 @@ final class AppModel: ObservableObject {
     }
 
     var connectionModePresentation: ConnectionModePresentation {
-        ConnectionModePresentation.make(
+        if UserDefaults.standard.bool(forKey: ManualDirectConfiguration.enabledKey) {
+            return ConnectionModePresentation(
+                mode: vowlan.availability.isOnlineForDisplay ? .vowlan : .offline,
+                title: "远程直连",
+                status: vowlan.availability.isOnlineForDisplay ? "已连接" : "不可达",
+                detail: "自有 frp · 控制与音频均使用 TLS"
+            )
+        }
+        return ConnectionModePresentation.make(
             vowlanOnline: vowlan.availability.isOnlineForDisplay,
             cloudModeEnabled: CloudModePreference.isEnabled(),
             cloudOnline: cloudAgentStatus?.cloudOnline == true
@@ -533,7 +541,11 @@ final class AppModel: ObservableObject {
                     credential: credential
                 ))
                 Task {
-                    await VoIPPushController.shared.syncRegistration(with: vowlanAPI)
+                    if LocalModePreference.isEnabled() {
+                        try? await vowlanAPI.setPushCloudEnabled(false)
+                    } else {
+                        await VoIPPushController.shared.syncRegistration(with: vowlanAPI)
+                    }
                 }
             }
             guard self.currentCallTransport == .vowlan,
@@ -687,6 +699,22 @@ final class AppModel: ObservableObject {
             }
         }
         objectWillChange.send()
+        if hasStarted { restartPolling() }
+    }
+
+    /// A manual destination change must not reuse cursors or a previously verified phone.
+    func reloadDirectConnection() {
+        guard !callLifecycleSnapshot.state.representsCall else { return }
+        lastSuccessfulLocalAPI = nil
+        observedCallLocalAPI = nil
+        eventRevision = AgentEventCursor.initial
+        smsRevision = 0
+        eventStreamSupported = nil
+        consecutivePollFailures = 0
+        isOnline = false
+        isReconnecting = false
+        vowlan.restartBrowsing()
+        Task { await vowlan.probeNow() }
         if hasStarted { restartPolling() }
     }
 
@@ -1029,6 +1057,7 @@ final class AppModel: ObservableObject {
                     after: eventRevision,
                     timeout: AgentEventPollingPolicy.timeout(hasActiveCall: callLifecycleSnapshot.state.representsCall)
                 )
+                try Task.checkCancellation()
                 eventStreamSupported = true
                 eventRevision = AgentEventCursor.advanced(from: eventRevision, to: event.revision)
                 let shouldFetchSMS = AgentEventPollingPolicy.shouldFetchSMS(
@@ -1705,6 +1734,9 @@ final class AppModel: ObservableObject {
         // VoWLAN，就复用同一已鉴权端点；绝不能把通用 isOnline 误当成 USB ECM。
         guard isOnline, !isReconnecting, let cached = lastSuccessfulLocalAPI,
               case let .vowlan(endpoint, credential) = cached.route else { return nil }
+        if UserDefaults.standard.bool(forKey: ManualDirectConfiguration.enabledKey) {
+            guard endpoint == ManualDirectConfiguration.endpoint() else { return nil }
+        } else if endpoint.isManual { return nil }
         return (cached, .vowlan(endpoint: endpoint, credential: credential))
     }
 

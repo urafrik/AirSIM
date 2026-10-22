@@ -89,16 +89,26 @@ struct WatchLocalPCMEndpoint: Equatable, Sendable {
     let host: String
     let port: UInt16
     let secret: Data
+    let usesTLS: Bool
 
     init?(dictionary: [String: Any]) {
         guard let host = dictionary["pcm_host"] as? String,
               let rawPort = dictionary["pcm_port"] as? Int,
-              (1024...65535).contains(rawPort),
+              ((dictionary["pcm_tls"] as? Bool == true ? 1 : 1024)...65535).contains(rawPort),
               let encoded = dictionary["pcm_secret"] as? String else { return nil }
+        let usesTLS = dictionary["pcm_tls"] as? Bool ?? false
         let octets = host.split(separator: ".").compactMap { UInt8($0) }
-        guard octets.count == 4,
-              octets[0] == 10 || (octets[0] == 172 && (16...31).contains(octets[1]))
-                || (octets[0] == 192 && octets[1] == 168) else { return nil }
+        if usesTLS {
+            guard host.count <= 253, host.split(separator: ".", omittingEmptySubsequences: false).count >= 2,
+                  host.split(separator: ".", omittingEmptySubsequences: false).allSatisfy({ label in
+                      !label.isEmpty && label.count <= 63 && label.first != "-" && label.last != "-"
+                          && label.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
+                  }) else { return nil }
+        } else {
+            guard octets.count == 4,
+                  octets[0] == 10 || (octets[0] == 172 && (16...31).contains(octets[1]))
+                    || (octets[0] == 192 && octets[1] == 168) else { return nil }
+        }
         let base64 = encoded.replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")
         let padded = base64 + String(repeating: "=", count: (4 - base64.count % 4) % 4)
@@ -106,6 +116,7 @@ struct WatchLocalPCMEndpoint: Equatable, Sendable {
         self.host = host
         port = UInt16(rawPort)
         self.secret = secret
+        self.usesTLS = usesTLS
     }
 }
 

@@ -97,6 +97,10 @@ struct AirSIMSettingsView: View {
         buildSetting: Bundle.main.object(forInfoDictionaryKey: "AirSIMPushRelayURL") as? String,
         bundleID: Bundle.main.bundleIdentifier
     )
+    @State private var directHost = UserDefaults.standard.string(forKey: ManualDirectConfiguration.hostKey) ?? ""
+    @State private var directControl = UserDefaults.standard.string(forKey: ManualDirectConfiguration.controlKey) ?? "17592"
+    @State private var directPCM = UserDefaults.standard.string(forKey: ManualDirectConfiguration.pcmKey) ?? "17593"
+    @State private var directMessage: String?
     @State private var message: String?
     @State private var selfTestPhase: SelfTestPhase = .idle
     @State private var selfTestReport: CloudSelfTestReport?
@@ -120,7 +124,7 @@ struct AirSIMSettingsView: View {
                     Text("运行模式")
                 } footer: {
                     Text(localModeEnabled
-                        ? "仅使用同一 Wi-Fi 或手机热点下的 VoWLAN。不会注册 Relay、APNs、PushKit 或 CallKit。"
+                        ? "使用局域网 VoWLAN 或已配置的远程直连。不会注册 Relay、APNs、PushKit 或 CallKit。"
                         : "关闭后可按需启用云端 Relay、PushKit 和 CallKit。")
                 }
 
@@ -145,6 +149,36 @@ struct AirSIMSettingsView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+
+                Section {
+                    TextField("域名或 IPv4（例如 airsim.example.com）", text: $directHost)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                    TextField("公网控制端口", text: $directControl).keyboardType(.numberPad)
+                    TextField("公网音频端口", text: $directPCM).keyboardType(.numberPad)
+                    Button("保存并启用仅直连（停用云端）") {
+                        do {
+                            try ManualDirectConfiguration.save(host: directHost, control: directControl, pcm: directPCM)
+                            localModeEnabled = true
+                            cloudModeEnabled = false
+                            model.reloadDirectConnection()
+                            directMessage = "已保存；请查看连接状态确认鉴权结果"
+                        } catch { directMessage = error.localizedDescription }
+                    }
+                    Button("停用远程直连，恢复局域网发现") {
+                        UserDefaults.standard.set(false, forKey: ManualDirectConfiguration.enabledKey)
+                        model.reloadDirectConnection()
+                        directMessage = "已恢复自动发现"
+                    }
+                    LabeledContent("手动端点", value: ManualDirectConfiguration.endpoint() == nil ? "未启用" : "已配置 TLS，连通性见连接状态")
+                    if let directMessage { Text(directMessage).font(.footnote) }
+                } header: {
+                    Text("frp / 内网穿透直连")
+                } footer: {
+                    Text("先在同一局域网配对。两个端口都需要 TLS 网关及有效证书，音频端口为 TLS/TCP，不是 HTTPS。启用后优先使用手动端点，不依赖 Bonjour；关闭云端模式可避免 Relay 回退。完全停用 Relay 后，仅能在 App 活跃时接听来电，不能保证锁屏后台来电唤醒。通话中不能修改端点。")
+                }
+                .disabled(model.callLifecycleSnapshot.state.representsCall)
 
                 Section("三星连接") {
                     LabeledContent("VoWLAN", value: VoWLANStatusCopy.text(for: model.vowlan.availability))
@@ -214,7 +248,7 @@ struct AirSIMSettingsView: View {
                 } header: {
                     Text("云端 Relay")
                 } footer: {
-                    Text("云端关闭后，局域网内的三星 VoWLAN 仍可使用；公网拨打、接听和短信需要云端 Relay 与有效设备注册。")
+                    Text("云端关闭后可使用 VoWLAN 或手动远程直连；后台来电唤醒仍需要自建 Relay 与 APNs。")
                 }
 
                 Section {

@@ -20,7 +20,12 @@ enum PCMRoute: Equatable, Sendable {
     }
 
     var requiresWiFi: Bool {
-        if case .vowlan = self { return true }
+        if case let .vowlan(endpoint, _) = self { return !endpoint.isManual }
+        return false
+    }
+
+    var usesTLS: Bool {
+        if case let .vowlan(endpoint, _) = self { return endpoint.usesTLS }
         return false
     }
 
@@ -186,6 +191,7 @@ final class AudioSessionController: ObservableObject {
                 port: NWEndpoint.Port(rawValue: route.port)!,
                 handshakeSequence: handshakeSequence,
                 requiresWiFi: route.requiresWiFi,
+                usesTLS: route.usesTLS,
                 onPCM: { [weak self] pcm in
                     Task { @MainActor [weak self] in self?.schedulePlayback(pcm) }
                 },
@@ -229,7 +235,7 @@ final class AudioSessionController: ObservableObject {
             playbackQueue.reset()
             active = true
             transportReady = false
-            routeDescription = route.requiresWiFi ? "正在连接 VoWLAN 语音…" : "正在连接模块网络语音…"
+            routeDescription = route.usesTLS ? "正在连接远程直连语音…" : route.requiresWiFi ? "正在连接 VoWLAN 语音…" : "正在连接模块网络语音…"
             diagnosticDescription = "\(DeviceContext.displayName) PCM 尚未握手"
             moduleDiagnosticDescription = ""
             errorMessage = nil
@@ -751,6 +757,7 @@ private final class NetworkPCMTransport: @unchecked Sendable {
     private let port: NWEndpoint.Port
     private let handshakeSequence: PCMHandshakeSequence
     private let requiresWiFi: Bool
+    private let usesTLS: Bool
     private let queue = DispatchQueue(label: "com.jieden.airsim.network-pcm")
     private let onPCM: @Sendable (Data) -> Void
     private let onEvent: @Sendable (Event) -> Void
@@ -777,6 +784,7 @@ private final class NetworkPCMTransport: @unchecked Sendable {
         port: NWEndpoint.Port,
         handshakeSequence: PCMHandshakeSequence,
         requiresWiFi: Bool,
+        usesTLS: Bool,
         onPCM: @escaping @Sendable (Data) -> Void,
         onEvent: @escaping @Sendable (Event) -> Void
     ) {
@@ -784,6 +792,7 @@ private final class NetworkPCMTransport: @unchecked Sendable {
         self.port = port
         self.handshakeSequence = handshakeSequence
         self.requiresWiFi = requiresWiFi
+        self.usesTLS = usesTLS
         self.onPCM = onPCM
         self.onEvent = onEvent
     }
@@ -841,12 +850,12 @@ private final class NetworkPCMTransport: @unchecked Sendable {
         guard !stopped else { return }
         generation += 1
         let attempt = generation
-        let useWiredInterface = !requiresWiFi && !fallbackAttempted
+        let useWiredInterface = !requiresWiFi && !usesTLS && !fallbackAttempted
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
         tcp.enableKeepalive = true
         tcp.keepaliveIdle = 2
-        let parameters = NWParameters(tls: nil, tcp: tcp)
+        let parameters = NWParameters(tls: usesTLS ? NWProtocolTLS.Options() : nil, tcp: tcp)
         // 首选 USB ECM；部分 iOS 版本把 USB 网卡报告为 other，失败后再放宽接口筛选。
         if requiresWiFi {
             parameters.requiredInterfaceType = .wifi
@@ -856,7 +865,7 @@ private final class NetworkPCMTransport: @unchecked Sendable {
         let connection = NWConnection(host: host, port: port, using: parameters)
         self.connection = connection
         readyForPCM = false
-        onEvent(.status(requiresWiFi ? "正在通过 VoWLAN 连接 PCM" : (useWiredInterface ? "正在通过 USB 网卡连接 PCM" : "正在回退到普通 TCP 连接 PCM")))
+        onEvent(.status(usesTLS ? "正在通过远程 TLS 连接 PCM" : requiresWiFi ? "正在通过 VoWLAN 连接 PCM" : (useWiredInterface ? "正在通过 USB 网卡连接 PCM" : "正在回退到普通 TCP 连接 PCM")))
         connection.pathUpdateHandler = { [weak self, weak connection] path in
             guard let self, connection != nil else { return }
             self.queue.async {

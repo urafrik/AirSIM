@@ -1,0 +1,21 @@
+# frpc on the always-on LAN computer. Merge proxies into your existing config.
+serverAddr = "YOUR_FRPS_PUBLIC_IP"
+serverPort = 7000
+auth.method = "token"
+auth.token = "REPLACE_WITH_YOUR_EXISTING_FRPS_TOKEN"
+transport.tls.enable = true
+
+# Forward TLS bytes unchanged. stunnel terminates TLS inside your LAN.
+[[proxies]]
+name = "airsim-control-tls"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 17592
+remotePort = 17592
+
+[[proxies]]
+name = "airsim-pcm-tls"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 17593
+remotePort = 17593

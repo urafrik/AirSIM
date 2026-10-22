@@ -388,6 +388,56 @@ final class AirSIMTests: XCTestCase {
         XCTAssertEqual(window.scheduledPackets, 12)
     }
 
+    func testManualDirectUsesTLSAndAllowsCellularAudio() throws {
+        let endpoint = try VoWLANEndpoint(manualHost: " AirSIM.example.com ", controlPort: 443, pcmPort: 17593)
+        XCTAssertEqual(endpoint.controlBaseURL.absoluteString, "https://airsim.example.com:443/")
+        XCTAssertTrue(endpoint.usesTLS)
+        let credential = try VoWLANCredential(secret: Data(repeating: 0x42, count: 32))
+        let route = PCMRoute.vowlan(endpoint: endpoint, credential: credential)
+        XCTAssertFalse(route.requiresWiFi)
+        XCTAssertTrue(route.usesTLS)
+        let api = AirSIMAPI(route: .vowlan(endpoint: endpoint, credential: credential))
+        XCTAssertEqual(api.baseURL.scheme, "https")
+    }
+
+    func testManualDirectRejectsURLsInjectionAndInvalidPorts() {
+        for host in ["https://example.com", "example.com/path", "user@example.com", "example.com:443",
+                     "example.com\r\nHost:evil", "", "a..com", "-a.example", "a_.example", "999.1.1.1"] {
+            XCTAssertThrowsError(try VoWLANEndpoint(manualHost: host, controlPort: 443, pcmPort: 17593), host)
+        }
+        XCTAssertThrowsError(try VoWLANEndpoint(manualHost: "example.com", controlPort: 0, pcmPort: 17593))
+        XCTAssertThrowsError(try VoWLANEndpoint(manualHost: "example.com", controlPort: 443, pcmPort: 443))
+        XCTAssertNoThrow(try VoWLANEndpoint(manualHost: "203.0.113.10", controlPort: 443, pcmPort: 17593))
+    }
+
+    func testManualDirectPersistenceIsAtomicOnInvalidInput() throws {
+        let name = "AirSIMDirectTests-" + UUID().uuidString
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        XCTAssertNil(ManualDirectConfiguration.endpoint(defaults: defaults))
+        try ManualDirectConfiguration.save(host: "example.com", control: "443", pcm: "17593", defaults: defaults)
+        let saved = ManualDirectConfiguration.endpoint(defaults: defaults)
+        XCTAssertNotNil(saved)
+        XCTAssertThrowsError(try ManualDirectConfiguration.save(host: "evil/path", control: "443", pcm: "17593", defaults: defaults))
+        XCTAssertThrowsError(try ManualDirectConfiguration.save(host: "example.com", control: "65536", pcm: "17593", defaults: defaults))
+        XCTAssertEqual(ManualDirectConfiguration.endpoint(defaults: defaults), saved)
+        defaults.set(false, forKey: ManualDirectConfiguration.enabledKey)
+        XCTAssertNil(ManualDirectConfiguration.endpoint(defaults: defaults))
+    }
+
+    func testWatchDirectEndpointRequiresTLSForPublicHosts() {
+        let secret = Data(repeating: 0x42, count: 32).base64EncodedString()
+        let endpoint: [String: Any] = ["pcm_host": "airsim.example.com", "pcm_port": 443,
+                                     "pcm_secret": secret, "pcm_tls": true]
+        XCTAssertTrue(WatchLocalPCMEndpoint(dictionary: endpoint)?.usesTLS == true)
+        var plain = endpoint
+        plain["pcm_tls"] = false
+        XCTAssertNil(WatchLocalPCMEndpoint(dictionary: plain))
+        plain["pcm_tls"] = true
+        plain["pcm_host"] = "example.com/path"
+        XCTAssertNil(WatchLocalPCMEndpoint(dictionary: plain))
+    }
+
     func testOnlySamsungPrivateEndpointsAreAccepted() throws {
         let endpoint = try VoWLANEndpoint(host: "192.168.43.1", controlPort: 7575, pcmPort: 7576)
         XCTAssertEqual(endpoint.controlBaseURL.absoluteString, "http://192.168.43.1:7575/")

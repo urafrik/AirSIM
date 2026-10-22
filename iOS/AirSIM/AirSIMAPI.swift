@@ -25,7 +25,7 @@ enum LocalAgentRoute: Equatable, Sendable {
     var traceDescription: String {
         switch self {
         case .moduleLocal: return "已停用的旧模块路线"
-        case .vowlan: return "VoWLAN · 同一局域网"
+        case let .vowlan(endpoint, _): return endpoint.isManual ? "远程直连 · TLS" : "VoWLAN · 同一局域网"
         }
     }
 
@@ -77,9 +77,12 @@ struct AirSIMAPI: Sendable {
     init(route: LocalAgentRoute = .moduleLocal) {
         self.route = route
         let baseURL = route.baseURL
-        precondition(Self.isAllowedLocalURL(baseURL), "模块代理地址必须是本地 HTTP 地址")
+        let manualTLS: Bool
+        if case let .vowlan(endpoint, _) = route { manualTLS = endpoint.isManual && endpoint.usesTLS }
+        else { manualTLS = false }
+        precondition(manualTLS || Self.isAllowedLocalURL(baseURL), "控制地址必须是私网 HTTP 或手动配置的 TLS 端点")
         self.baseURL = baseURL
-        self.transport = WiredHTTPTransport(policy: route == .moduleLocal ? .moduleLocal : .vowlan)
+        self.transport = WiredHTTPTransport(policy: manualTLS ? .remoteDirect : (route == .moduleLocal ? .moduleLocal : .vowlan))
     }
 
     init(baseURL: URL) {
