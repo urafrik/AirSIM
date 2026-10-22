@@ -256,7 +256,7 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
                     "ok": true, "request_id": requestID.uuidString,
                     "call_id": record.id, "call_uuid": uuid.uuidString,
                     "number": number, "media_route": "vowlan",
-                    "pcm_host": endpoint.host, "pcm_tls": endpoint.usesTLS, "pcm_port": Int(endpoint.pcmPort),
+                    "pcm_host": endpoint.host, "pcm_tls": endpoint.usesTLS, "pcm_certificate_sha256": endpoint.certificateSHA256 ?? "", "pcm_port": Int(endpoint.pcmPort),
                     "pcm_secret": credential.encodedSecret,
                     "expires_at": Date().addingTimeInterval(300).timeIntervalSince1970,
                 ])
@@ -379,7 +379,7 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
             monitorLocalAudio(callID: callID, api: api)
             replyHandler([
                 "ok": true, "call_id": callID, "call_uuid": uuid.uuidString,
-                "media_route": "vowlan", "pcm_host": endpoint.host, "pcm_tls": endpoint.usesTLS,
+                "media_route": "vowlan", "pcm_host": endpoint.host, "pcm_tls": endpoint.usesTLS, "pcm_certificate_sha256": endpoint.certificateSHA256 ?? "",
                 "pcm_port": Int(endpoint.pcmPort), "pcm_secret": credential.encodedSecret,
                 "cloud_media_allowed": CloudModePreference.isEnabled(),
             ])

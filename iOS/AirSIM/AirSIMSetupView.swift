@@ -97,9 +97,10 @@ struct AirSIMSettingsView: View {
         buildSetting: Bundle.main.object(forInfoDictionaryKey: "AirSIMPushRelayURL") as? String,
         bundleID: Bundle.main.bundleIdentifier
     )
-    @State private var directHost = UserDefaults.standard.string(forKey: ManualDirectConfiguration.hostKey) ?? ""
+    @State private var directHost = UserDefaults.standard.string(forKey: ManualDirectConfiguration.hostKey) ?? ManualDirectConfiguration.defaultHost
     @State private var directControl = UserDefaults.standard.string(forKey: ManualDirectConfiguration.controlKey) ?? "17592"
     @State private var directPCM = UserDefaults.standard.string(forKey: ManualDirectConfiguration.pcmKey) ?? "17593"
+    @State private var directPin = UserDefaults.standard.string(forKey: ManualDirectConfiguration.pinKey) ?? ManualDirectConfiguration.defaultCertificateSHA256
     @State private var directMessage: String?
     @State private var message: String?
     @State private var selfTestPhase: SelfTestPhase = .idle
@@ -157,9 +158,13 @@ struct AirSIMSettingsView: View {
                         .keyboardType(.URL)
                     TextField("公网控制端口", text: $directControl).keyboardType(.numberPad)
                     TextField("公网音频端口", text: $directPCM).keyboardType(.numberPad)
+                    TextField("证书 SHA256 指纹（自签证书必填）", text: $directPin)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.asciiCapable)
                     Button("保存并启用仅直连（停用云端）") {
                         do {
-                            try ManualDirectConfiguration.save(host: directHost, control: directControl, pcm: directPCM)
+                            try ManualDirectConfiguration.save(host: directHost, control: directControl, pcm: directPCM, certificateSHA256: directPin)
                             localModeEnabled = true
                             cloudModeEnabled = false
                             model.reloadDirectConnection()
@@ -176,7 +181,7 @@ struct AirSIMSettingsView: View {
                 } header: {
                     Text("frp / 内网穿透直连")
                 } footer: {
-                    Text("先在同一局域网配对。两个端口都需要 TLS 网关及有效证书，音频端口为 TLS/TCP，不是 HTTPS。启用后优先使用手动端点，不依赖 Bonjour；关闭云端模式可避免 Relay 回退。完全停用 Relay 后，仅能在 App 活跃时接听来电，不能保证锁屏后台来电唤醒。通话中不能修改端点。")
+                    Text("先在同一局域网配对。两个端口都需要 TLS 网关。自签证书须填写服务器证书的 SHA256 指纹；不符即拒绝连接。留空时使用系统 CA 验证。音频端口为 TLS/TCP，不是 HTTPS。启用后优先使用手动端点，不依赖 Bonjour；关闭云端模式可避免 Relay 回退。完全停用 Relay 后，仅能在 App 活跃时接听来电，不能保证锁屏后台来电唤醒。通话中不能修改端点。")
                 }
                 .disabled(model.callLifecycleSnapshot.state.representsCall)
 

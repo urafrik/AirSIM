@@ -82,7 +82,10 @@ struct AirSIMAPI: Sendable {
         else { manualTLS = false }
         precondition(manualTLS || Self.isAllowedLocalURL(baseURL), "控制地址必须是私网 HTTP 或手动配置的 TLS 端点")
         self.baseURL = baseURL
-        self.transport = WiredHTTPTransport(policy: manualTLS ? .remoteDirect : (route == .moduleLocal ? .moduleLocal : .vowlan))
+        let certificateSHA256: String?
+        if case let .vowlan(endpoint, _) = route { certificateSHA256 = endpoint.certificateSHA256 }
+        else { certificateSHA256 = nil }
+        self.transport = WiredHTTPTransport(policy: manualTLS ? .remoteDirect : (route == .moduleLocal ? .moduleLocal : .vowlan), certificateSHA256: certificateSHA256)
     }
 
     init(baseURL: URL) {

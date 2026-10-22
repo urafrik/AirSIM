@@ -44,6 +44,18 @@ jobs:
           mkdir -p "$BUILD_DIR"
           xcodebuild -version | tee "$BUILD_DIR/xcode-version.txt"
 
+      - name: Verify certificate pins with real TLS handshakes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 deploy/direct-frp/generate_self_signed.py --host pin-test.example.test --out "$BUILD_DIR/pin-fixture"
+          openssl x509 -in "$BUILD_DIR/pin-fixture/fullchain.pem" -outform DER -out "$BUILD_DIR/pin-fixture/server.der"
+          python3 iOS/TLSPinSmoke/server.py "$BUILD_DIR/pin-fixture" &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
+          swiftc -swift-version 5 iOS/Shared/WatchCallPayload.swift iOS/TLSPinSmoke/main.swift -o "$BUILD_DIR/tls-pin-smoke"
+          "$BUILD_DIR/tls-pin-smoke" "$BUILD_DIR/pin-fixture" 2>&1 | tee "$BUILD_DIR/tls-pin-tests.log"
+
       - name: Archive for physical iPhone without signing
         shell: bash
         run: |
@@ -89,5 +101,6 @@ jobs:
           path: |
             ${{ env.BUILD_DIR }}/archive.log
             ${{ env.BUILD_DIR }}/xcode-version.txt
+            ${{ env.BUILD_DIR }}/tls-pin-tests.log
           if-no-files-found: ignore
           retention-days: 7

@@ -6,6 +6,7 @@ struct VoWLANEndpoint: Equatable, Hashable, Sendable {
     let controlPort: UInt16
     let pcmPort: UInt16
     let usesTLS: Bool
+    let certificateSHA256: String?
 
     var isManual: Bool { usesTLS }
 
@@ -17,16 +18,23 @@ struct VoWLANEndpoint: Equatable, Hashable, Sendable {
         self.controlPort = controlPort
         self.pcmPort = pcmPort
         self.usesTLS = false
+        self.certificateSHA256 = nil
     }
 
     /// Explicit user configuration only; Bonjour remains restricted to private IPv4.
-    init(manualHost: String, controlPort: UInt16, pcmPort: UInt16) throws {
+    init(manualHost: String, controlPort: UInt16, pcmPort: UInt16, certificateSHA256: String? = nil) throws {
         let host = manualHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard Self.isValidManualHost(host), controlPort > 0, pcmPort > 0,
               controlPort != pcmPort else { throw VoWLANControllerError.invalidManualEndpoint }
         self.host = host
         self.controlPort = controlPort
         self.pcmPort = pcmPort
+        if let certificateSHA256 {
+            guard let normalized = PinnedTLS.normalize(certificateSHA256) else {
+                throw VoWLANControllerError.invalidCertificatePin
+            }
+            self.certificateSHA256 = normalized
+        } else { self.certificateSHA256 = nil }
         self.usesTLS = true
     }
 
@@ -214,21 +222,32 @@ enum ManualDirectConfiguration {
     static let hostKey = "airsim.direct.host"
     static let controlKey = "airsim.direct.control-port"
     static let pcmKey = "airsim.direct.pcm-port"
+    static let pinKey = "airsim.direct.certificate-sha256"
+    static let defaultHost = "vip.gz.frp.one"
+    static let defaultCertificateSHA256 = "75ec813f2a20007c2f8e7ded2c1a372f8d7d5e1a6178e3f6ddd34e667c3ad6ba"
+
+    static func configuredPin(defaults: UserDefaults = .standard) -> String? {
+        let value = defaults.string(forKey: pinKey) ?? ""
+        return value.isEmpty ? nil : value
+    }
 
     static func endpoint(defaults: UserDefaults = .standard) -> VoWLANEndpoint? {
         guard defaults.bool(forKey: enabledKey),
               let host = defaults.string(forKey: hostKey),
               let control = UInt16(defaults.string(forKey: controlKey) ?? ""),
               let pcm = UInt16(defaults.string(forKey: pcmKey) ?? "") else { return nil }
-        return try? VoWLANEndpoint(manualHost: host, controlPort: control, pcmPort: pcm)
+        return try? VoWLANEndpoint(manualHost: host, controlPort: control, pcmPort: pcm, certificateSHA256: configuredPin(defaults: defaults))
     }
 
-    static func save(host: String, control: String, pcm: String,
+    static func save(host: String, control: String, pcm: String, certificateSHA256: String = "",
                      defaults: UserDefaults = .standard) throws {
         guard let controlPort = UInt16(control), let pcmPort = UInt16(pcm) else {
             throw VoWLANControllerError.invalidManualEndpoint
         }
-        let endpoint = try VoWLANEndpoint(manualHost: host, controlPort: controlPort, pcmPort: pcmPort)
+        let rawPin = certificateSHA256.trimmingCharacters(in: .whitespacesAndNewlines)
+        let endpoint = try VoWLANEndpoint(manualHost: host, controlPort: controlPort, pcmPort: pcmPort,
+                                        certificateSHA256: rawPin.isEmpty ? nil : rawPin)
+        defaults.set(endpoint.certificateSHA256 ?? "", forKey: pinKey)
         defaults.set(endpoint.host, forKey: hostKey)
         defaults.set(String(controlPort), forKey: controlKey)
         defaults.set(String(pcmPort), forKey: pcmKey)
@@ -239,12 +258,14 @@ enum ManualDirectConfiguration {
 enum VoWLANControllerError: LocalizedError {
     case invalidAdvertisement
     case invalidManualEndpoint
+    case invalidCertificatePin
     case notDiscovered
     case notPaired
     case authenticationFailed
 
     var errorDescription: String? {
         switch self {
+        case .invalidCertificatePin: return "证书 SHA256 指纹必须是 64 位十六进制，可带冒号或空格"
         case .invalidManualEndpoint: return "请输入域名或 IPv4 地址及两个不同的端口（1–65535），不要填写协议或路径"
         case .invalidAdvertisement: return "VoWLAN 广播内容无效"
         case .notDiscovered: return "尚未发现三星 VoWLAN"
@@ -521,7 +542,8 @@ final class VoWLANController: ObservableObject {
                 Self.apply(signed, to: &request)
                 // The raw HTTP transport never follows redirects carrying signed headers.
                 let response = try await WiredHTTPTransport(
-                    policy: endpoint.isManual ? .remoteDirect : .vowlan
+                    policy: endpoint.isManual ? .remoteDirect : .vowlan,
+                    certificateSHA256: endpoint.certificateSHA256
                 ).send(request)
                 return (response.body, response.statusCode)
             }

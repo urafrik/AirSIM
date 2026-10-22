@@ -18,11 +18,13 @@ final class WiredHTTPTransport: @unchecked Sendable {
 
     private let queue = DispatchQueue(label: "com.jieden.airsim.wired-http", qos: .userInitiated)
     private let policy: Policy
+    private let certificateSHA256: String?
     private let interfaceLock = NSLock()
     private var preferredInterfaceType: NWInterface.InterfaceType = .wiredEthernet
 
-    init(policy: Policy = .moduleLocal) {
+    init(policy: Policy = .moduleLocal, certificateSHA256: String? = nil) {
         self.policy = policy
+        self.certificateSHA256 = certificateSHA256
     }
 
     static func allowsInterfaceFallback(httpMethod: String?) -> Bool {
@@ -121,6 +123,7 @@ final class WiredHTTPTransport: @unchecked Sendable {
                 port: port,
                 body: body,
                 route: route,
+                certificateSHA256: certificateSHA256,
                 queue: queue,
                 continuation: continuation
             )
@@ -274,6 +277,7 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
         port: NWEndpoint.Port,
         body: WiredHTTPBody,
         route: WiredInterfaceRoute,
+        certificateSHA256: String?,
         queue: DispatchQueue,
         continuation: CheckedContinuation<WiredHTTPResponse, Error>
     ) {
@@ -289,7 +293,7 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
         tcp.noDelay = true
         tcp.enableKeepalive = true
         tcp.keepaliveIdle = 5
-        let parameters = NWParameters(tls: request.url?.scheme == "https" ? NWProtocolTLS.Options() : nil, tcp: tcp)
+        let parameters = NWParameters(tls: request.url?.scheme == "https" ? PinnedTLS.options(host: String(describing: host), certificateSHA256: certificateSHA256) : nil, tcp: tcp)
         // 优先绑定实际 USB ECM 接口；找不到接口名时才按接口类型约束。
         switch route {
         case .any: break

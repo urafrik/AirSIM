@@ -29,6 +29,11 @@ enum PCMRoute: Equatable, Sendable {
         return false
     }
 
+    var certificateSHA256: String? {
+        if case let .vowlan(endpoint, _) = self { return endpoint.certificateSHA256 }
+        return nil
+    }
+
     func handshake() throws -> Data {
         switch self {
         case .moduleLocal: throw APIError.disabledLegacyRoute
@@ -192,6 +197,7 @@ final class AudioSessionController: ObservableObject {
                 handshakeSequence: handshakeSequence,
                 requiresWiFi: route.requiresWiFi,
                 usesTLS: route.usesTLS,
+                certificateSHA256: route.certificateSHA256,
                 onPCM: { [weak self] pcm in
                     Task { @MainActor [weak self] in self?.schedulePlayback(pcm) }
                 },
@@ -758,6 +764,7 @@ private final class NetworkPCMTransport: @unchecked Sendable {
     private let handshakeSequence: PCMHandshakeSequence
     private let requiresWiFi: Bool
     private let usesTLS: Bool
+    private let certificateSHA256: String?
     private let queue = DispatchQueue(label: "com.jieden.airsim.network-pcm")
     private let onPCM: @Sendable (Data) -> Void
     private let onEvent: @Sendable (Event) -> Void
@@ -785,6 +792,7 @@ private final class NetworkPCMTransport: @unchecked Sendable {
         handshakeSequence: PCMHandshakeSequence,
         requiresWiFi: Bool,
         usesTLS: Bool,
+        certificateSHA256: String?,
         onPCM: @escaping @Sendable (Data) -> Void,
         onEvent: @escaping @Sendable (Event) -> Void
     ) {
@@ -793,6 +801,7 @@ private final class NetworkPCMTransport: @unchecked Sendable {
         self.handshakeSequence = handshakeSequence
         self.requiresWiFi = requiresWiFi
         self.usesTLS = usesTLS
+        self.certificateSHA256 = certificateSHA256
         self.onPCM = onPCM
         self.onEvent = onEvent
     }
@@ -855,7 +864,7 @@ private final class NetworkPCMTransport: @unchecked Sendable {
         tcp.noDelay = true
         tcp.enableKeepalive = true
         tcp.keepaliveIdle = 2
-        let parameters = NWParameters(tls: usesTLS ? NWProtocolTLS.Options() : nil, tcp: tcp)
+        let parameters = NWParameters(tls: usesTLS ? PinnedTLS.options(host: String(describing: host), certificateSHA256: certificateSHA256) : nil, tcp: tcp)
         // 首选 USB ECM；部分 iOS 版本把 USB 网卡报告为 other，失败后再放宽接口筛选。
         if requiresWiFi {
             parameters.requiredInterfaceType = .wifi
