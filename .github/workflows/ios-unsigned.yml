@@ -19,12 +19,14 @@ jobs:
   build:
     runs-on: macos-15
     timeout-minutes: 45
-    env:
-      BUILD_DIR: ${{ runner.temp }}/airsim-ios
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+
+      - name: Prepare build directory
+        shell: bash
+        run: echo "BUILD_DIR=$RUNNER_TEMP/airsim-ios" >> "$GITHUB_ENV"
 
       - name: Select Xcode 26
         shell: bash
