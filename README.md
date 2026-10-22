@@ -1,6 +1,6 @@
 # AirSIM — Android 与 iPhone / Apple Watch 跨设备通话、短信和 VoWLAN
 
-> 本地 frp 直连改造版：支持 iPhone 手动配置域名、控制端口和音频端口，使用内网 stunnel 终止 TLS。配置和限制见 [frp 双端口远程直连指南](docs/FRP_DIRECT_GUIDE.md)。仅直连模式不能保证锁屏后台来电送达；iOS 改动尚未经过 Xcode 构建及真机验证。
+> 本地 frp 直连改造版：支持 iPhone 手动配置域名、控制端口和音频端口，使用内网 stunnel 终止 TLS。配置和限制见 [frp 双端口远程直连指南](docs/FRP_DIRECT_GUIDE.md)。仅直连模式不能保证锁屏后台来电送达；iOS 改动已通过 GitHub Actions / Xcode 26.3 的未签名实机归档构建，尚未真机验证。[构建与 IPA 下载](https://github.com/urafrik/AirSIM/actions/runs/39726501773)。
 
 [![Android Standalone](https://img.shields.io/badge/Android-Standalone%20APK-3DDC84?logo=android&logoColor=white)](android-standalone/README.md)
 [![iOS](https://img.shields.io/badge/iOS-16.3%2B-000000?logo=apple&logoColor=white)](iOS/README.md)
