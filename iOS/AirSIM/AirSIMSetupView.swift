@@ -102,6 +102,7 @@ struct AirSIMSettingsView: View {
     @State private var directPCM = UserDefaults.standard.string(forKey: ManualDirectConfiguration.pcmKey) ?? "17593"
     @State private var directPin = UserDefaults.standard.string(forKey: ManualDirectConfiguration.pinKey) ?? ManualDirectConfiguration.defaultCertificateSHA256
     @State private var directMessage: String?
+    @State private var recordings: [URL] = []
     @State private var message: String?
     @State private var selfTestPhase: SelfTestPhase = .idle
     @State private var selfTestReport: CloudSelfTestReport?
@@ -298,6 +299,19 @@ struct AirSIMSettingsView: View {
                         : "依次验证本机 Push 凭据、AirSIM Relay 身份、设备注册和 Agent 最近 90 秒心跳；不会拨号或发送短信。")
                 }
 
+                Section {
+                    ForEach(recordings, id: \.self) { file in
+                        ShareLink(item: file) {
+                            Label(file.deletingPathExtension().lastPathComponent, systemImage: "waveform")
+                        }
+                    }
+                    Button("刷新录音列表") { recordings = LocalCallPCMRecorder.recordings() }
+                } header: {
+                    Text("通话录音")
+                } footer: {
+                    Text("在通话页点击录音后，双向语音仅保存在本机。停止录音或挂断后可在这里分享，也可从“文件 → 我的 iPhone → AirSIM → Recordings”访问。")
+                }
+
                 Section("关于") {
                     LabeledContent("项目", value: "AirSIM · Samsung")
                     Picker("外观", selection: $settings.appearance) {
@@ -309,6 +323,7 @@ struct AirSIMSettingsView: View {
             }
             .navigationTitle("设置")
             .task {
+                recordings = LocalCallPCMRecorder.recordings()
                 if !localModeEnabled {
                     await model.refreshCloudStatusForDiagnostics()
                 }

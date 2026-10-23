@@ -19,6 +19,7 @@ public final class BridgeUnitTests {
         testSamsungAudioContract();
         testListenerRecoveryPolicy();
         testVoiceTxRouteTimeoutPolicy();
+        testAudioPolicyRoute();
         System.out.println("PASS BridgeUnitTests checks=" + checks);
     }
 
@@ -147,6 +148,23 @@ public final class BridgeUnitTests {
             "unverified route remains inside grace period");
         check(PhoneAudioBridge.voiceTxRouteTimedOut(false, 1000, 3000),
             "unverified route fails after grace period");
+    }
+
+    private static void testAudioPolicyRoute() {
+        String active = "  1. Port ID: 12; I/O handle: 69; IOProfile name:incall_music_uplink\n"
+                + "    Devices: {AUDIO_DEVICE_OUT_TELEPHONY_TX, @:}\n"
+                + "    1. Port ID: 22; Session ID: 7841; uid 2000; State: Active\n"
+                + "      Preferred Device Port ID: 3;\n";
+        check(ShellAudioPolicyRoute.matches(active, 7841, 3), "active shell session uses Telephony Tx");
+        check(!ShellAudioPolicyRoute.matches(active, 7842, 3), "unrelated session is rejected");
+        check(!ShellAudioPolicyRoute.matches(active, 7841, 4), "different preferred device is rejected");
+        check(!ShellAudioPolicyRoute.matches(active.replace("State: Active", "State: Inactive"), 7841, 3), "inactive session is rejected");
+        check(!ShellAudioPolicyRoute.matches(active.replace("OUT_TELEPHONY_TX", "OUT_SPEAKER"), 7841, 3), "speaker output is rejected");
+        check(!ShellAudioPolicyRoute.matches(active.replace("uid 2000", "uid 10000"), 7841, 3), "unrelated UID is rejected");
+        check(!ShellAudioPolicyRoute.matches("  Inputs (1):\n" + active, 7841, 3), "input section is excluded");
+        check(!PhoneAudioBridge.matchesTelephonyDevice(0, 3), "missing native route is rejected");
+        check(!PhoneAudioBridge.matchesTelephonyDevice(2, 3), "native speaker route is rejected");
+        check(PhoneAudioBridge.matchesTelephonyDevice(3, 3), "matching native Telephony route accepted");
     }
 
     private static void expectFailure(String[] args, String name) {

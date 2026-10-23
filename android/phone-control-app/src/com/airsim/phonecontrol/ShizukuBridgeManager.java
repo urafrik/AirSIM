@@ -107,10 +107,19 @@ final class ShizukuBridgeManager {
                 .processNameSuffix("pcm_shell")
                 .debuggable(true)
                 .tag("airsim-pcm-v1")
-                .version(5);
+                .version(installedServiceVersion(app));
         Shizuku.addBinderReceivedListenerSticky(binderReceived);
         Shizuku.addBinderDeadListener(binderDead);
         Shizuku.addRequestPermissionResultListener(permissionResult);
+    }
+
+    private static int installedServiceVersion(Context context) {
+        try {
+            long updated = context.getPackageManager().getPackageInfo(context.getPackageName(), 0).lastUpdateTime;
+            return (int) ((updated / 1000L) % Integer.MAX_VALUE);
+        } catch (Exception error) {
+            return 6;
+        }
     }
 
     static ShizukuBridgeManager initialize(Context context) {

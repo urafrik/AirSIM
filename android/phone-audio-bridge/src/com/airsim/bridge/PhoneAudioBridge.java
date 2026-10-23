@@ -162,6 +162,7 @@ public final class PhoneAudioBridge {
             emit(started, "client_ready", Map.of("result", "ok"));
             streamCallAudio(client, started, stats);
         } catch (Throwable error) {
+            error.printStackTrace(System.err);
             emit(started, "session_error", Map.of(
                 "error_class", error.getClass().getName(),
                 "error_message", safeMessage(error),
@@ -223,8 +224,7 @@ public final class PhoneAudioBridge {
                 "track_buffer_bytes", trackBufferSize,
                 "result", "ok"));
 
-            recorder.startRecording();
-            track.play();
+            ShellAudioContext.start(recorder, track);
             if (recorder.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) {
                 throw new IllegalStateException("VOICE_DOWNLINK AudioRecord did not start");
             }
@@ -333,17 +333,34 @@ public final class PhoneAudioBridge {
                     firstPlaybackAt = SystemClock.elapsedRealtime();
                 }
                 AudioDeviceInfo routed = track.getRoutedDevice();
-                if (!routeVerified && routed != null
-                        && routed.getType() == AudioDeviceInfo.TYPE_TELEPHONY) {
+                AudioDeviceInfo preferred = track.getPreferredDevice();
+                boolean verificationDue = voiceTxRouteTimedOut(
+                        routeVerified, firstPlaybackAt, SystemClock.elapsedRealtime());
+                int nativeId = verificationDue ? nativeRoutedDeviceId(track) : 0;
+                if (!routeVerified && (routed != null
+                        && routed.getType() == AudioDeviceInfo.TYPE_TELEPHONY
+                        || preferred != null && preferred.getType() == AudioDeviceInfo.TYPE_TELEPHONY
+                        && matchesTelephonyDevice(nativeId, preferred.getId()))) {
                     routeVerified = true;
                     emit(started, "voice_tx_route_verified", Map.of(
-                        "device_id", routed.getId(),
-                        "device_type", routed.getType(),
+                        "device_id", routed != null ? routed.getId() : nativeId,
+                        "device_type", AudioDeviceInfo.TYPE_TELEPHONY,
                         "result", "ok"));
                 }
                 if (voiceTxRouteTimedOut(
                         routeVerified, firstPlaybackAt, SystemClock.elapsedRealtime())) {
-                    throw new IllegalStateException("VOICE_TX did not route to Telephony Tx");
+                    if (preferred != null && preferred.getType() == AudioDeviceInfo.TYPE_TELEPHONY
+                            && ShellAudioPolicyRoute.verify(track.getAudioSessionId(), preferred.getId())) {
+                        routeVerified = true;
+                        emit(started, "voice_tx_route_verified", Map.of(
+                                "device_id", preferred.getId(), "verification", "active_audio_policy_session",
+                                "result", "ok"));
+                        continue;
+                    }
+                    throw new IllegalStateException("VOICE_TX did not route to Telephony Tx"
+                            + " routed=" + (routed == null ? "null" : routed.getId() + ":" + routed.getType())
+                            + " preferred=" + (preferred == null ? "null" : preferred.getId() + ":" + preferred.getType())
+                            + " native_id=" + nativeId);
                 }
             }
         } catch (Throwable error) {
@@ -355,6 +372,20 @@ public final class PhoneAudioBridge {
         } finally {
             Arrays.fill(frame, (byte) 0);
             stop.run();
+        }
+    }
+
+    static boolean matchesTelephonyDevice(int routedId, int telephonyId) {
+        return routedId > 0 && telephonyId > 0 && routedId == telephonyId;
+    }
+
+    private static int nativeRoutedDeviceId(AudioTrack track) {
+        try {
+            Method method = AudioTrack.class.getDeclaredMethod("native_getRoutedDeviceId");
+            method.setAccessible(true);
+            return (Integer) method.invoke(track);
+        } catch (ReflectiveOperationException | RuntimeException error) {
+            return 0;
         }
     }
 

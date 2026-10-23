@@ -31,6 +31,7 @@ public final class ShizukuBridgeUserService extends Binder {
     private boolean bridgeDesired;
     private boolean muteCycleStarted;
     private boolean previousMuted;
+    private final ShellLocalAudio localAudio = new ShellLocalAudio();
 
     public ShizukuBridgeUserService() {
         Log.i(TAG, "created without context uid=" + Process.myUid());
@@ -180,24 +181,9 @@ public final class ShizukuBridgeUserService extends Binder {
     private String setLocalOutputMuted(boolean muted) throws Exception {
         synchronized (lock) {
             verifyIdentity();
-            if (muted && !muteCycleStarted) {
-                previousMuted = queryVoiceCallMuted();
-                muteCycleStarted = true;
-            }
-            if (muted) {
-                if (!previousMuted) runCommand(PrivilegedBridgeProtocol.audioMuteCommand(true));
-                boolean verified = queryVoiceCallMuted();
-                if (!verified) throw new IOException("voice-call output mute was not applied");
-                return "local_output_muted previous_muted=" + previousMuted + " verified=true";
-            }
-            if (muteCycleStarted && !previousMuted) {
-                runCommand(PrivilegedBridgeProtocol.audioMuteCommand(false));
-                if (queryVoiceCallMuted()) throw new IOException("voice-call output unmute was not applied");
-            }
-            boolean restoredPrevious = previousMuted;
-            muteCycleStarted = false;
-            previousMuted = false;
-            return "local_output_restored previous_muted=" + restoredPrevious + " verified=true";
+            String result = localAudio.setMuted(muted);
+            muteCycleStarted = muted;
+            return result;
         }
     }
 

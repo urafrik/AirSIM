@@ -17,6 +17,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class CallRepository {
     private static final Map<String, Call> CALLS = new ConcurrentHashMap<>();
     private static final Map<Call, String> IDS = new ConcurrentHashMap<>();
+    private static final Map<String, Long> ENDED = new ConcurrentHashMap<>();
 
     private CallRepository() {}
 
@@ -33,7 +34,12 @@ public final class CallRepository {
 
     public static void remove(Call call) {
         String id = IDS.remove(call);
-        if (id != null) CALLS.remove(id);
+        if (id != null) {
+            long now = System.nanoTime();
+            ENDED.entrySet().removeIf(entry -> now - entry.getValue() > TimeUnit.MINUTES.toNanos(5));
+            ENDED.put(id, now);
+            CALLS.remove(id);
+        }
     }
 
     public static String firstId() {
@@ -64,8 +70,10 @@ public final class CallRepository {
         if (requestedID == null || requestedID.isBlank()) return idForAction(action);
         if (!requestedID.equals(publishedID)) return "";
         Call call = CALLS.get(androidID);
+        if ("end".equals(action) && call == null && recentlyEnded(androidID)) return androidID;
         if (call == null) return "";
         int state = call.getState();
+        if ("end".equals(action)) return androidID;
         if (state == Call.STATE_DISCONNECTED || state == Call.STATE_DISCONNECTING
                 || ("answer".equals(action) && state != Call.STATE_RINGING)) return "";
         return androidID;
@@ -91,7 +99,12 @@ public final class CallRepository {
             return error.isEmpty() ? ActionResult.success() : ActionResult.failure(error);
         }
         Call call = CALLS.get(command.callId);
-        if (call == null) return ActionResult.failure("active call id mismatch");
+        if (call == null) {
+            if ("end".equals(command.action) && recentlyEnded(command.callId)) return ActionResult.success();
+            return ActionResult.failure("active call id mismatch");
+        }
+        if ("end".equals(command.action) && (call.getState() == Call.STATE_DISCONNECTED
+                || call.getState() == Call.STATE_DISCONNECTING)) return ActionResult.success();
         CountDownLatch invoked = new CountDownLatch(1);
 		AtomicReference<Throwable> invocationError = new AtomicReference<>();
         new Handler(Looper.getMainLooper()).post(() -> {
@@ -135,6 +148,11 @@ public final class CallRepository {
         } catch (Exception error) {
             return ActionResult.failure(error.getClass().getSimpleName() + ": " + error.getMessage());
         }
+    }
+
+    private static boolean recentlyEnded(String id) {
+        Long ended = ENDED.get(id);
+        return ended != null && System.nanoTime() - ended < TimeUnit.MINUTES.toNanos(5);
     }
 
     public static final class ActionResult {

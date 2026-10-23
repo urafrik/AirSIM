@@ -25,7 +25,10 @@ def inspect_bundle(app):
 
 
 def main():
-    source, output = (Path(p).resolve() for p in sys.argv[1:])
+    arguments = sys.argv[1:]
+    iphone_only = '--iphone-only' in arguments
+    arguments = [p for p in arguments if p != '--iphone-only']
+    source, output = (Path(p).resolve() for p in arguments)
     info = inspect_bundle(source)
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='airsim-unsigned-') as scratch:
@@ -33,6 +36,11 @@ def main():
         payload.mkdir()
         app = payload / 'AirSIM.app'
         subprocess.run(['ditto', str(source), str(app)], check=True)
+        if iphone_only:
+            watch = app / 'Watch'
+            if watch.exists():
+                assert watch.resolve().is_relative_to(Path(scratch).resolve())
+                shutil.rmtree(watch)
         # Archive was built with signing disabled. Do not retain any copied profiles.
         for path in list(app.rglob('embedded.mobileprovision')):
             path.unlink()
@@ -44,7 +52,8 @@ def main():
         version = str(info.get('CFBundleShortVersionString', 'dev'))
         if not version or any(c not in '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-' for c in version):
             raise ValueError('Invalid version for artifact filename')
-        ipa = output / f'AirSIM-iOS-{version}-frp-unsigned.ipa'
+        suffix = '-iPhone-only' if iphone_only else ''
+        ipa = output / f'AirSIM-iOS-{version}-frp{suffix}-unsigned.ipa'
         subprocess.run(['ditto', '-c', '-k', '--keepParent', '--norsrc', str(payload), str(ipa)], check=True)
     digest = hashlib.sha256(ipa.read_bytes()).hexdigest()
     (output / 'SHA256SUMS.txt').write_text(f'{digest}  {ipa.name}\n', encoding='utf-8')
@@ -53,7 +62,7 @@ def main():
         'version': info.get('CFBundleShortVersionString'),
         'build': info.get('CFBundleVersion'),
         'signed': False,
-        'contains_watch_app': True,
+        'contains_watch_app': not iphone_only,
         'contains_live_activity': True,
     }, indent=2) + '\n', encoding='utf-8')
     print(ipa)

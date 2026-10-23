@@ -7,6 +7,7 @@ public final class CallRepositoryTests {
         answerNeverTargetsAnActiveCallWithoutRinging();
         cloudRejectTargetsOnlyItsAuthenticatedCall();
         localRejectUsesPublishedCallIdentity();
+        repeatedHangupCannotDisconnectANewerCall();
         System.out.println("call repository tests passed");
     }
 
@@ -73,6 +74,21 @@ public final class CallRepositoryTests {
             CallRepository.remove(target);
             CallRepository.remove(other);
         }
+    }
+
+    private static void repeatedHangupCannotDisconnectANewerCall() {
+        Call ended = new Call(Call.STATE_ACTIVE);
+        String endedID = CallRepository.add(ended);
+        CallRepository.remove(ended);
+        Call newer = new Call(Call.STATE_ACTIVE);
+        String newerID = CallRepository.add(newer);
+        try {
+            assertTrue(CallRepository.execute(new AgentCommand("repeat", "end", endedID, ""), null).success);
+            assertTrue(!CallRepository.execute(new AgentCommand("unknown", "end", "unknown-id", ""), null).success);
+            assertEquals(Integer.toString(Call.STATE_ACTIVE), Integer.toString(newer.getState()));
+            assertEquals(endedID, CallRepository.idForPublishedAction("end", "old", "old", endedID));
+            assertEquals("", CallRepository.idForPublishedAction("end", "old", "new", newerID));
+        } finally { CallRepository.remove(newer); }
     }
 
     private static void assertTrue(boolean value) {

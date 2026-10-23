@@ -125,7 +125,7 @@ final class StandaloneAgentGateway {
             case "/api/calls/dial" -> command("dial", "", input.optString("number", ""), "");
             case "/api/calls/answer" -> command("answer", localCallTarget("answer", input), "", "");
             case "/api/calls/reject" -> command("reject", localCallTarget("reject", input), "", "");
-            case "/api/calls/hangup" -> command("end", localCallTarget("end", input), "", "");
+            case "/api/calls/hangup" -> hangupLocalCall(input);
             case "/api/calls/dtmf" -> command("dtmf", CallRepository.idForAction("dtmf"), input.optString("digit", ""), "");
             case "/api/sms/send" -> command("send_sms", "", input.optString("phone", ""),
                     input.optString("message", ""));
@@ -226,6 +226,23 @@ final class StandaloneAgentGateway {
             case "send_sms" -> value.put("sent", true).put("segments", result.segments());
         }
         return ok(value.toString());
+    }
+
+    private AgentClient.ForwardResponse hangupLocalCall(JSONObject input) throws Exception {
+        String target;
+        synchronized (callsLock) {
+            String requested = input.optString("call_id");
+            for (int i = callHistory.length() - 1; i >= 0; i--) {
+                JSONObject ended = callHistory.optJSONObject(i);
+                if (ended != null && !requested.isBlank() && requested.equals(ended.optString("id"))
+                        && "ended".equals(ended.optString("state"))) {
+                    return ok("{\"hung_up\":true}");
+                }
+            }
+            if (activeCall == null && requested.isBlank()) return ok("{\"hung_up\":true}");
+            target = localCallTarget("end", input);
+        }
+        return command("end", target, "", "");
     }
 
     private String localCallTarget(String action, JSONObject input) {

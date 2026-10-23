@@ -56,6 +56,20 @@ jobs:
           swiftc -swift-version 5 iOS/Shared/PinnedTLS.swift iOS/Shared/WatchCallPayload.swift iOS/TLSPinSmoke/main.swift -o "$BUILD_DIR/tls-pin-smoke"
           "$BUILD_DIR/tls-pin-smoke" "$BUILD_DIR/pin-fixture" 2>&1 | tee "$BUILD_DIR/tls-pin-tests.log"
 
+      - name: Verify local stereo call recording
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          source = Path('iOS/AirSIM/AudioSessionController.swift').read_text()
+          recorder = source.split('final class LocalCallPCMRecorder:', 1)[1].split('/// 管理 iPhone/iPad', 1)[0]
+          Path(os.environ['BUILD_DIR'], 'LocalCallPCMRecorder.swift').write_text('import Foundation\nfinal class LocalCallPCMRecorder:' + recorder)
+          PY
+          swiftc -swift-version 5 "$BUILD_DIR/LocalCallPCMRecorder.swift" iOS/RecordingSmoke/main.swift -o "$BUILD_DIR/recording-smoke"
+          "$BUILD_DIR/recording-smoke" | tee "$BUILD_DIR/recording-tests.log"
+
       - name: Archive for physical iPhone without signing
         shell: bash
         run: |
@@ -80,7 +94,7 @@ jobs:
           set -euo pipefail
           python3 iOS/scripts/package_unsigned.py \
             "$BUILD_DIR/AirSIM.xcarchive/Products/Applications/AirSIM.app" \
-            "$BUILD_DIR/artifacts"
+            "$BUILD_DIR/artifacts" --iphone-only
           cp "$BUILD_DIR/xcode-version.txt" "$BUILD_DIR/artifacts/"
           printf '%s\n' "$GITHUB_SHA" > "$BUILD_DIR/artifacts/source-commit.txt"
           cp iOS/SELF_SIGNING.md "$BUILD_DIR/artifacts/SELF_SIGNING.md"

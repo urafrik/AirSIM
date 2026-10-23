@@ -94,6 +94,134 @@ enum SpeakerRoutePolicy {
     }
 }
 
+/// Serializes recording writes away from the real-time microphone callback.
+final class LocalCallPCMRecorder: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "airsim.local-call-recording")
+    private var handles: [FileHandle]?
+    private var temporary: URL?
+    private var destination: URL?
+    private var firstSample = [false, false]
+    private var started: TimeInterval = 0
+    private var writeError: Error?
+
+    static var directory: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Recordings", isDirectory: true)
+    }
+
+    static func recordings() -> [URL] {
+        ((try? FileManager.default.contentsOfDirectory(at: directory,
+            includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension == "wav" }.sorted { $0.lastPathComponent > $1.lastPathComponent }
+    }
+
+    func start() throws {
+        try queue.sync {
+            guard handles == nil else { return }
+            let manager = FileManager.default
+            try manager.createDirectory(at: Self.directory, withIntermediateDirectories: true)
+            let temporary = manager.temporaryDirectory.appendingPathComponent("AirSIM-recording-\(UUID())")
+            try manager.createDirectory(at: temporary, withIntermediateDirectories: true)
+            var opened: [FileHandle] = []
+            do {
+                for name in ["uplink.pcm", "downlink.pcm"] {
+                    let file = temporary.appendingPathComponent(name)
+                    guard manager.createFile(atPath: file.path, contents: nil) else {
+                        throw CocoaError(.fileWriteUnknown)
+                    }
+                    opened.append(try FileHandle(forWritingTo: file))
+                }
+            } catch {
+                opened.forEach { try? $0.close() }
+                try? manager.removeItem(at: temporary)
+                throw error
+            }
+            self.temporary = temporary
+            self.destination = Self.directory.appendingPathComponent(
+                "AirSIM-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString.prefix(6)).wav")
+            self.handles = opened
+            self.firstSample = [false, false]
+            self.started = ProcessInfo.processInfo.systemUptime
+            self.writeError = nil
+        }
+    }
+
+    func append(_ pcm: Data, uplink: Bool) {
+        let arrived = ProcessInfo.processInfo.systemUptime
+        queue.async {
+            guard let handles = self.handles, !pcm.isEmpty, self.writeError == nil else { return }
+            let index = uplink ? 0 : 1
+            do {
+                let handle = handles[index]
+                let current = try handle.offset()
+                let timestampOffset = UInt64(max(0, arrived - self.started) * 8_000) * 2
+                // Align the first packet and preserve long gaps after a transport reconnection.
+                if !self.firstSample[index] || timestampOffset > current + 4_000 {
+                    let position = max(current, timestampOffset)
+                    try handle.truncate(atOffset: position)
+                    try handle.seek(toOffset: position)
+                    self.firstSample[index] = true
+                }
+                try handle.write(contentsOf: pcm)
+            } catch { self.writeError = error }
+        }
+    }
+
+    func stop(completion: @escaping @Sendable (Result<URL?, Error>) -> Void) {
+        queue.async {
+            guard let handles = self.handles, let temporary = self.temporary,
+                  let destination = self.destination else { completion(.success(nil)); return }
+            self.handles = nil
+            defer { try? FileManager.default.removeItem(at: temporary) }
+            do {
+                try handles.forEach { try $0.close() }
+                if let error = self.writeError { throw error }
+                try Self.finish(temporary: temporary, destination: destination)
+                completion(.success(destination))
+            } catch { completion(.failure(error)) }
+        }
+    }
+
+    private static func finish(temporary: URL, destination: URL) throws {
+        let left = try FileHandle(forReadingFrom: temporary.appendingPathComponent("uplink.pcm"))
+        let right = try FileHandle(forReadingFrom: temporary.appendingPathComponent("downlink.pcm"))
+        defer { try? left.close(); try? right.close() }
+        let length = max(try left.seekToEnd(), try right.seekToEnd()) & ~UInt64(1)
+        guard length <= UInt64((UInt32.max - 36) / 2) else { throw CocoaError(.fileWriteOutOfSpace) }
+        try left.seek(toOffset: 0); try right.seek(toOffset: 0)
+        let partial = destination.appendingPathExtension("partial")
+        guard FileManager.default.createFile(atPath: partial.path, contents: nil) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        let output = try FileHandle(forWritingTo: partial)
+        defer { try? output.close(); try? FileManager.default.removeItem(at: partial) }
+        var header = Data("RIFF".utf8)
+        func u32(_ value: UInt32) { var bytes = value.littleEndian; withUnsafeBytes(of: &bytes) { header.append(contentsOf: $0) } }
+        func u16(_ value: UInt16) { var bytes = value.littleEndian; withUnsafeBytes(of: &bytes) { header.append(contentsOf: $0) } }
+        u32(UInt32(length * 2) + 36); header.append(Data("WAVEfmt ".utf8))
+        u32(16); u16(1); u16(2); u32(8_000); u32(32_000); u16(4); u16(16)
+        header.append(Data("data".utf8)); u32(UInt32(length * 2))
+        try output.write(contentsOf: header)
+        var remaining = length
+        while remaining > 0 {
+            let count = Int(min(remaining, 16_384))
+            let l = Array(try left.read(upToCount: count) ?? Data())
+            let r = Array(try right.read(upToCount: count) ?? Data())
+            var stereo = Data(count: count * 2)
+            for offset in stride(from: 0, to: count, by: 2) {
+                for byte in 0..<2 {
+                    stereo[offset * 2 + byte] = offset + byte < l.count ? l[offset + byte] : 0
+                    stereo[offset * 2 + 2 + byte] = offset + byte < r.count ? r[offset + byte] : 0
+                }
+            }
+            try output.write(contentsOf: stereo)
+            remaining -= UInt64(count)
+        }
+        try output.close()
+        try FileManager.default.moveItem(at: partial, to: destination)
+    }
+}
+
 /// 管理 iPhone/iPad 内置麦克风、扬声器与模块 ECM 网络 PCM 之间的双向通话音频。
 @MainActor
 final class AudioSessionController: ObservableObject {
@@ -110,6 +238,7 @@ final class AudioSessionController: ObservableObject {
     private var player: AVAudioPlayerNode?
     private var transport: NetworkPCMTransport?
     private var encoder: VoicePCMEncoder?
+    private let callRecorder = LocalCallPCMRecorder()
     private var callTonePlayer: AVAudioPlayer?
     private var currentCallTone: CallTone?
     private var muted = false
@@ -191,6 +320,7 @@ final class AudioSessionController: ObservableObject {
             case .vowlan:
                 handshakeSequence = PCMHandshakeSequence { try route.handshake() }
             }
+            let callRecorder = self.callRecorder
             let transport = NetworkPCMTransport(
                 host: NWEndpoint.Host(route.host),
                 port: NWEndpoint.Port(rawValue: route.port)!,
@@ -198,7 +328,8 @@ final class AudioSessionController: ObservableObject {
                 requiresWiFi: route.requiresWiFi,
                 usesTLS: route.usesTLS,
                 certificateSHA256: route.certificateSHA256,
-                onPCM: { [weak self] pcm in
+                onPCM: { [weak self, callRecorder] pcm in
+                    callRecorder.append(pcm, uplink: false)
                     Task { @MainActor [weak self] in self?.schedulePlayback(pcm) }
                 },
                 onEvent: { [weak self] event in
@@ -227,7 +358,10 @@ final class AudioSessionController: ObservableObject {
             input.installTap(onBus: 0, bufferSize: 960, format: inputFormat) {
                 buffer, _ in
                 let pcm = encoder.encode(buffer)
-                if !pcm.isEmpty { transport.sendPCM(pcm) }
+                if !pcm.isEmpty {
+                    callRecorder.append(pcm, uplink: true)
+                    transport.sendPCM(pcm)
+                }
             }
 
             engine.prepare()
@@ -261,6 +395,24 @@ final class AudioSessionController: ObservableObject {
         try configureCallAudioSession()
         try AVAudioSession.sharedInstance().overrideOutputAudioPort(.none)
         sessionActivationManagedByCallKit = true
+    }
+
+    func startRecording() throws {
+        guard active, transportReady else {
+            throw NSError(domain: "AirSIMRecording", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "请在通话语音连接后开始录音"])
+        }
+        try callRecorder.start()
+    }
+
+    func stopRecording() {
+        callRecorder.stop { [weak self] result in
+            if case let .failure(error) = result {
+                Task { @MainActor [weak self] in
+                    self?.errorMessage = "录音保存失败：\(error.localizedDescription)"
+                }
+            }
+        }
     }
 
     func setMuted(_ muted: Bool) {
@@ -405,6 +557,7 @@ final class AudioSessionController: ObservableObject {
     }
 
     func deactivate() {
+        stopRecording()
         let callKitManagedSession = sessionActivationManagedByCallKit
         sessionActivationManagedByCallKit = false
         muted = false

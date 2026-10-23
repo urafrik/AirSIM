@@ -1417,11 +1417,9 @@ final class AppModel: ObservableObject {
     func toggleRecording() async {
         let target = !isRecording
         do {
-            guard let samsungAPI = verifiedVoWLANAPI() else {
-                throw CallKitBridgeError.noReachableTransport
-            }
-            let response = try await samsungAPI.setCallRecording(target)
-            isRecording = response.recording
+            if target { try audio.startRecording() }
+            else { audio.stopRecording() }
+            isRecording = target
             errorMessage = nil
         } catch {
             debugDialLog("操作失败：\(error.localizedDescription)")

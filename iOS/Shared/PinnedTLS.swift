@@ -41,4 +41,3 @@ enum PinnedTLS {
         return SecTrustEvaluateWithError(trust, nil)
     }
 }
-
