@@ -779,6 +779,11 @@ final class AppModel: ObservableObject {
             } else {
                 acceptedActiveLifecycle = false
             }
+            // A status request started before hangup may arrive after its confirmation.
+            // Do not reopen the same terminal call from that stale snapshot.
+            if let active = status.active, !acceptedActiveLifecycle,
+               callLifecycleSnapshot.callID == active.id,
+               callLifecycleSnapshot.state.isTerminal { return }
             if let active = status.active {
                 observedCallLocalAPI = (callID: active.id, service: result.api)
                 // Agent 状态与统一生命周期真正汇合后才能撤掉临时呼出页。
@@ -1344,7 +1349,30 @@ final class AppModel: ObservableObject {
         guard let localAPI = reachableLocalAPI else {
             throw CallKitBridgeError.noReachableTransport
         }
-        try await localAPI.hangupCall(callID: activeCall?.id)
+        let endingCallID = activeCall?.id ?? callLifecycleSnapshot.callID
+        try await localAPI.hangupCall(callID: endingCallID)
+        finishConfirmedLocalHangup(callID: endingCallID)
+    }
+
+    private func finishConfirmedLocalHangup(callID: String?) {
+        guard let callID, callLifecycleSnapshot.callID == callID,
+              let uuid = callLifecycleSnapshot.callUUID else { return }
+        let confirmed = applyCallLifecycle(CallLifecycleEvent(
+            callID: callID, callUUID: uuid, generation: callLifecycleSnapshot.generation,
+            state: .ended, source: .agent, timestamp: Date(),
+            traceID: "hangup-confirmed-\(UUID().uuidString.lowercased())", failure: nil))
+        guard confirmed else { return }
+        if activeCall?.id == callID { activeCall = nil }
+        if remoteCall?.id == callID { remoteCall = nil }
+        if pendingOutgoingCall?.id == callID { pendingOutgoingCall = nil }
+        if observedCallLocalAPI?.callID == callID { observedCallLocalAPI = nil }
+        callPresentationSurface = nil
+        audio.deactivate()
+        audioWarmupCallID = nil
+        isMuted = false
+        isRecording = false
+        clearLockedTransport()
+        backgroundStandby.resumeAfterCall()
     }
 
     private func beginCallTransitionProtection() {
@@ -2257,7 +2285,9 @@ extension AppModel: CallKitActionHandling {
             guard let localAPI = localCallControlAPI else {
                 throw CallKitBridgeError.noReachableTransport
             }
-            try await localAPI.hangupCall(callID: activeCall?.id)
+            let endingCallID = activeCall?.id ?? callLifecycleSnapshot.callID
+            try await localAPI.hangupCall(callID: endingCallID)
+            finishConfirmedLocalHangup(callID: endingCallID)
         }
     }
 

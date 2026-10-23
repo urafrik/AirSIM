@@ -70,6 +70,17 @@ jobs:
           swiftc -swift-version 5 "$BUILD_DIR/LocalCallPCMRecorder.swift" iOS/RecordingSmoke/main.swift -o "$BUILD_DIR/recording-smoke"
           "$BUILD_DIR/recording-smoke" | tee "$BUILD_DIR/recording-tests.log"
 
+      - name: Verify HTTP completion and hangup lifecycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 deploy/direct-frp/generate_self_signed.py --host 127.0.0.1 --out "$BUILD_DIR/http-fixture"
+          python3 iOS/HTTPTransportSmoke/server.py "$BUILD_DIR/http-fixture" &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
+          swiftc -parse-as-library -swift-version 5 iOS/Shared/PinnedTLS.swift iOS/AirSIM/WiredHTTPTransport.swift iOS/AirSIM/CallLifecycleStore.swift iOS/HTTPTransportSmoke/main.swift -o "$BUILD_DIR/http-smoke"
+          "$BUILD_DIR/http-smoke" "$BUILD_DIR/http-fixture" | tee "$BUILD_DIR/http-tests.log"
+
       - name: Archive for physical iPhone without signing
         shell: bash
         run: |

@@ -475,6 +475,15 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
                 }
                 self.responseData.append(data)
             }
+            do {
+                if let response = try WiredHTTPResponseParser.parseIfComplete(self.responseData) {
+                    self.finish(.success(response))
+                    return
+                }
+            } catch {
+                self.finish(.failure(error))
+                return
+            }
             if let error {
                 // 模块执行 ATD 时偶尔用 RST 结束连接；若完整 HTTP 响应已经到达，应采用响应而非误报失败。
                 if let response = try? WiredHTTPResponseParser.parse(self.responseData) {
@@ -509,6 +518,27 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
 
 /// 独立解析 HTTP/1.1 响应，便于对 Go Agent 的定长和分块响应做无网络测试。
 enum WiredHTTPResponseParser {
+    /// A framed HTTP response is complete independently of TCP/TLS connection shutdown.
+    static func parseIfComplete(_ data: Data) throws -> WiredHTTPResponse? {
+        guard let range = data.range(of: Data("\r\n\r\n".utf8)),
+              let header = String(data: data[..<range.lowerBound], encoding: .isoLatin1) else { return nil }
+        let lines = header.components(separatedBy: "\r\n")
+        var headers: [String: String] = [:]
+        for line in lines.dropFirst() {
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            headers[line[..<colon].trimmingCharacters(in: .whitespaces).lowercased()] =
+                line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+        }
+        let status = lines.first?.split(separator: " ").dropFirst().first.flatMap { Int($0) }
+        if status == 204 || status == 304 { return try parse(data) }
+        let chunked = headers["transfer-encoding"]?.lowercased().contains("chunked") == true
+        guard chunked || headers["content-length"] != nil else { return nil }
+        if let length = headers["content-length"], !chunked,
+           Int(length) == nil || (Int(length) ?? -1) < 0 { throw WiredHTTPError.invalidResponse }
+        do { return try parse(data) }
+        catch WiredHTTPError.incompleteResponse { return nil }
+    }
+
     static func parse(_ data: Data) throws -> WiredHTTPResponse {
         let separator = Data("\r\n\r\n".utf8)
         guard let range = data.range(of: separator),
@@ -553,14 +583,22 @@ enum WiredHTTPResponseParser {
         var decoded = Data()
 
         while cursor < data.endIndex {
-            guard let sizeRange = data[cursor...].range(of: lineBreak),
-                  let sizeLine = String(data: data[cursor..<sizeRange.lowerBound], encoding: .ascii),
+            guard let sizeRange = data[cursor...].range(of: lineBreak) else {
+                throw WiredHTTPError.incompleteResponse
+            }
+            guard let sizeLine = String(data: data[cursor..<sizeRange.lowerBound], encoding: .ascii),
                   let sizeToken = sizeLine.split(separator: ";", maxSplits: 1).first,
                   let size = Int(sizeToken.trimmingCharacters(in: .whitespaces), radix: 16) else {
                 throw WiredHTTPError.invalidResponse
             }
             cursor = sizeRange.upperBound
-            if size == 0 { return decoded }
+            if size == 0 {
+                if data[cursor...].starts(with: lineBreak) { return decoded }
+                guard data[cursor...].range(of: Data("\r\n\r\n".utf8)) != nil else {
+                    throw WiredHTTPError.incompleteResponse
+                }
+                return decoded
+            }
             guard size > 0,
                   let chunkEnd = data.index(cursor, offsetBy: size, limitedBy: data.endIndex),
                   data.distance(from: chunkEnd, to: data.endIndex) >= 2,
@@ -605,7 +643,7 @@ private enum WiredHTTPError: LocalizedError {
         case .connectionClosed: return "模块有线连接已关闭"
         case let .sendFailed(message): return "模块请求发送失败：\(message)"
         case let .receiveFailed(message): return "模块响应接收失败：\(message)"
-        case .timedOut: return "模块有线请求超时"
+        case .timedOut: return "设备网络请求超时"
         case .responseTooLarge: return "模块响应超过安全大小限制"
         case .invalidResponse: return "模块代理返回了无效 HTTP 响应"
         case .incompleteResponse: return "模块代理返回的 HTTP 响应不完整"

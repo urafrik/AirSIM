@@ -1,0 +1,53 @@
+import Foundation
+
+@main
+struct HTTPTransportSmoke {
+    static func main() async throws {
+        let fixture = URL(fileURLWithPath: CommandLine.arguments[1])
+        let pin = try String(contentsOf: fixture.appendingPathComponent("certificate-sha256.txt"), encoding: .utf8)
+        let transport = WiredHTTPTransport(policy: .remoteDirect, certificateSHA256: pin)
+        let expected = Data("{\"hung_up\":true}".utf8)
+        for path in ["complete", "fragmented", "chunked", "unframed", "no-content"] {
+            var request = URLRequest(url: URL(string: "https://127.0.0.1:18446/\(path)")!)
+            request.timeoutInterval = 1.5
+            let started = Date()
+            let response = try await transport.send(request)
+            precondition(Date().timeIntervalSince(started) < 1.5)
+            precondition(response.statusCode == (path == "no-content" ? 204 : 200))
+            precondition(response.body == (path == "no-content" ? Data() : expected))
+        }
+        for path in ["truncated", "chunked-incomplete"] {
+            var request = URLRequest(url: URL(string: "https://127.0.0.1:18446/\(path)")!)
+            request.timeoutInterval = 1.5
+            var rejected = false
+            do { _ = try await transport.send(request) }
+            catch { rejected = true }
+            precondition(rejected, "Truncated response must not confirm hangup")
+        }
+        testClockSkew()
+        print("PASS HTTP framing over TLS: complete, fragmented, chunked, trailers, EOF, truncation")
+        print("PASS end confirmation across device clock skew, with stale identity/generation rejection")
+    }
+
+    static func testClockSkew() {
+        let id = UUID()
+        func event(_ state: CallLifecycleState, _ source: CallLifecycleSource,
+                   _ seconds: TimeInterval, callID: String = "call-1",
+                   uuid: UUID? = nil, generation: UInt64 = 2) -> CallLifecycleEvent {
+            CallLifecycleEvent(callID: callID, callUUID: uuid ?? id, generation: generation,
+                               state: state, source: source, timestamp: Date(timeIntervalSince1970: seconds),
+                               traceID: nil, failure: nil)
+        }
+        var store = CallLifecycleStore()
+        precondition(store.apply(event(.active, .agent, 100)))
+        precondition(!store.apply(event(.active, .agent, 90)))
+        precondition(store.apply(event(.ending, .app, 110)))
+        precondition(!store.apply(event(.ended, .agent, 105, callID: "wrong-call")))
+        precondition(!store.apply(event(.ended, .agent, 105, uuid: UUID())))
+        precondition(!store.apply(event(.ended, .agent, 105, generation: 1)))
+        precondition(!store.apply(event(.ended, .app, 105)))
+        precondition(store.apply(event(.ended, .agent, 105)))
+        precondition(store.snapshot.state == .ended)
+        precondition(!store.apply(event(.active, .agent, 200)))
+    }
+}

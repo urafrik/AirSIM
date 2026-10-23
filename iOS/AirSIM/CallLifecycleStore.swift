@@ -81,7 +81,13 @@ struct CallLifecycleStore: Sendable {
         } else if event.generation < snapshot.generation {
             return false
         } else if event.generation == snapshot.generation, snapshot.generation > 0 {
-            if let timestamp = snapshot.timestamp, event.timestamp < timestamp { return false }
+            // App intents and Android events use different clocks. A matching authoritative
+            // terminal event must still complete an end intent when the device clock is behind.
+            let confirmsEndIntent = snapshot.state == .ending && event.state.isTerminal
+                && (snapshot.source == .app || snapshot.source == .callKit)
+                && (event.source == .agent || event.source == .relay)
+            if let timestamp = snapshot.timestamp, event.timestamp < timestamp,
+               !confirmsEndIntent { return false }
             guard Self.allows(from: snapshot.state, to: event.state) else { return false }
         } else if event.state == .idle {
             return false

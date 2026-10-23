@@ -185,7 +185,22 @@ struct AirSIMAPI: Sendable {
         try await postDecoded("api/calls/reject", LocalCallControlBody(callID: callID))
     }
     func hangupCall(callID: String? = nil) async throws {
-        try await post("api/calls/hangup", LocalCallControlBody(callID: callID))
+        do {
+            try await post("api/calls/hangup", LocalCallControlBody(callID: callID))
+        } catch {
+            let original = error
+            // Never repeat the command: a newer call may have started. Reconcile the target only.
+            for delay in [0.0, 0.2, 0.5] {
+                if Task.isCancelled { throw CancellationError() }
+                if delay > 0 { try await Task.sleep(for: .seconds(delay)) }
+                guard let status: CallStatus = try? await get("api/calls/status", timeout: 1.5) else { continue }
+                if status.active == nil { return }
+                if let callID, status.history?.contains(where: {
+                    $0.id == callID && ($0.endedAt != nil || $0.state == "ended")
+                }) == true { return }
+            }
+            throw original
+        }
     }
     func sendDTMF(_ digit: String) async throws { try await post("api/calls/dtmf", ["digit": digit]) }
     func setAudioMuted(_ muted: Bool) async throws { try await post("api/calls/audio/mute", ["muted": muted]) }
@@ -229,10 +244,10 @@ struct AirSIMAPI: Sendable {
 
     private func endpoint(_ path: String) -> URL { baseURL.appendingPathComponent(path) }
 
-    private func get<Response: Decodable>(_ path: String) async throws -> Response {
+    private func get<Response: Decodable>(_ path: String, timeout: TimeInterval = 6) async throws -> Response {
         var request = URLRequest(url: endpoint(path))
         request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.timeoutInterval = 6
+        request.timeoutInterval = timeout
         return try await decoded(request)
     }
 
