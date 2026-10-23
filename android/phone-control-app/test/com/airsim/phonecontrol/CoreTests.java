@@ -282,7 +282,11 @@ public final class CoreTests {
         assertTrue(!AgentCommand.parse("{\"id\":\"x\",\"action\":\"wipe\"}").isSupported());
 		AgentCommand smsCommand = AgentCommand.parse(
 				"{\"id\":\"sms-7\",\"action\":\"send_sms\",\"number\":\"+8613800138000\",\"message\":\"你好\\n世界\"}");
-		assertTrue(smsCommand.isSupported());
+        assertTrue(smsCommand.isSupported());
+        assertTrue(SMSPayloadPolicy.supportsMessaging(true, false, false));
+        assertTrue(SMSPayloadPolicy.supportsMessaging(false, true, true));
+        assertTrue(!SMSPayloadPolicy.supportsMessaging(false, true, false));
+        assertTrue(!SMSPayloadPolicy.supportsMessaging(false, false, true));
 		assertEquals("+8613800138000", smsCommand.number);
 		assertEquals("你好\n世界", smsCommand.message);
 		java.util.concurrent.atomic.AtomicInteger telecomRuns = new java.util.concurrent.atomic.AtomicInteger();

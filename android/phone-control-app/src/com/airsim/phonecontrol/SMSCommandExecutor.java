@@ -11,6 +11,7 @@ import android.content.pm.PackageManager;
 import android.os.Build;
 import android.telephony.SmsManager;
 import android.telephony.SubscriptionManager;
+import android.telephony.TelephonyManager;
 
 import java.util.ArrayList;
 import java.util.UUID;
@@ -28,16 +29,23 @@ final class SMSCommandExecutor {
             return AgentCommandDispatcher.Result.failure("号码或短信内容无效");
         }
         if (context.checkSelfPermission(Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
-            return AgentCommandDispatcher.Result.failure("AirSIM 缺少短信发送权限；请在三星应用权限中允许短信");
-        }
-        if (!context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_TELEPHONY_MESSAGING)) {
-            return AgentCommandDispatcher.Result.failure("此设备不支持系统短信发送");
+            return AgentCommandDispatcher.Result.failure("AirSIM 缺少短信发送权限；请在安卓应用权限中允许短信");
         }
 
         try {
+            PackageManager features = context.getPackageManager();
+            boolean messaging = features.hasSystemFeature(PackageManager.FEATURE_TELEPHONY_MESSAGING);
+            boolean telephony = features.hasSystemFeature(PackageManager.FEATURE_TELEPHONY);
+            TelephonyManager phone = context.getSystemService(TelephonyManager.class);
+            boolean smsCapable = phone != null && phone.isSmsCapable();
+            if (!SMSPayloadPolicy.supportsMessaging(messaging, telephony, smsCapable)) {
+                BridgeLog.info("sms_send_unavailable messaging_feature=" + messaging
+                        + " telephony_feature=" + telephony + " sms_capable=" + smsCapable);
+                return AgentCommandDispatcher.Result.failure("此设备不支持系统短信发送");
+            }
             int subscriptionID = SmsManager.getDefaultSmsSubscriptionId();
             if (subscriptionID == SubscriptionManager.INVALID_SUBSCRIPTION_ID) {
-                return AgentCommandDispatcher.Result.failure("请在三星 SIM 卡设置中选择默认短信 SIM");
+                return AgentCommandDispatcher.Result.failure("请在安卓 SIM 卡设置中选择默认短信 SIM");
             }
             SmsManager manager = context.getSystemService(SmsManager.class)
                     .createForSubscriptionId(subscriptionID);

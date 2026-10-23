@@ -3,6 +3,11 @@ package com.airsim.phonecontrol;
 public final class SMSPayloadPolicy {
     private SMSPayloadPolicy() {}
 
+    public static boolean supportsMessaging(boolean messagingFeature, boolean telephonyFeature,
+                                             boolean smsCapable) {
+        return messagingFeature || (telephonyFeature && smsCapable);
+    }
+
     public static boolean validDestination(String value) {
         if (value == null) return false;
         String trimmed = value.trim();
