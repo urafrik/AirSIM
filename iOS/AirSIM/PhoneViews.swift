@@ -1818,6 +1818,13 @@ struct ActiveCallView: View {
         .padding(.horizontal, 13)
         .frame(minHeight: 38)
         .callControlGlass(tint: audioStatusColor.opacity(0.10))
+        .contextMenu {
+            Button {
+                UIPasteboard.general.string = model.audio.diagnosticReport
+            } label: {
+                Label("复制音频诊断", systemImage: "doc.on.doc")
+            }
+        }
     }
 
     private var moduleIsReachable: Bool {

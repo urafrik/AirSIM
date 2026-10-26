@@ -246,6 +246,14 @@ final class AudioSessionController: ObservableObject {
     private var speakerRouteRetryTask: Task<Void, Never>?
     private var sessionActivationManagedByCallKit = false
     private var routeChangeObserver: NSObjectProtocol?
+    private var engineChangeObserver: NSObjectProtocol?
+    private var interruptionObserver: NSObjectProtocol?
+    private var recoveryTask: Task<Void, Never>?
+    private var interrupted = false
+    private var receivedCarrierAudio = false
+    private var playbackGeneration = 0
+    private var recoveryCount = 0
+    private var recoveryGeneration = 0
     private var playbackQueue = PlaybackQueueTracker(maximumFrames: 4_000)
 
     init() {
@@ -257,12 +265,41 @@ final class AudioSessionController: ObservableObject {
         ) { [weak self] notification in
             Task { @MainActor [weak self] in self?.handleRouteChange(notification) }
         }
+        engineChangeObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: nil, queue: .main
+        ) { [weak self] notification in
+            let changedEngine = notification.object as? AVAudioEngine
+            Task { @MainActor [weak self] in
+                guard let self, let changedEngine, self.engine === changedEngine else { return }
+                self.recoverPlaybackIfNeeded()
+            }
+        }
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
+        ) { [weak self] notification in
+            let type = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+            let options = notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if type == AVAudioSession.InterruptionType.began.rawValue {
+                    self.interrupted = true
+                    self.recoveryGeneration &+= 1
+                    self.recoveryTask?.cancel()
+                    self.recoveryTask = nil
+                } else if type == AVAudioSession.InterruptionType.ended.rawValue {
+                    self.interrupted = !AVAudioSession.InterruptionOptions(rawValue: options).contains(.shouldResume)
+                    self.recoverPlaybackIfNeeded()
+                }
+            }
+        }
     }
 
     deinit {
         if let routeChangeObserver {
             NotificationCenter.default.removeObserver(routeChangeObserver)
         }
+        if let engineChangeObserver { NotificationCenter.default.removeObserver(engineChangeObserver) }
+        if let interruptionObserver { NotificationCenter.default.removeObserver(interruptionObserver) }
     }
 
     var microphonePermissionIsUndetermined: Bool {
@@ -290,6 +327,9 @@ final class AudioSessionController: ObservableObject {
         sessionAlreadyActive: Bool = false
     ) async -> Bool {
         guard !active else { return true }
+        interrupted = false
+        receivedCarrierAudio = false
+        recoveryCount = 0
         let permission = await requestMicrophonePermission()
         guard permission else {
             errorMessage = "需要麦克风权限才能进行双向通话"
@@ -422,8 +462,16 @@ final class AudioSessionController: ObservableObject {
 
     /// 根据模块通话状态播放来电铃声或呼出等待音，接通后立即让位给网络 PCM。
     func updateCallTone(for call: CallRecord?) {
-        guard !active else {
-            stopCallTone()
+        if active {
+            if let call, LocalAudioPlaybackPolicy.shouldPlayWaitingTone(
+                state: call.state, direction: call.direction, receivedCarrierAudio: receivedCarrierAudio
+            ) {
+                // A local waiting tone fills silent early media without replacing carrier announcements.
+                // Keep the voiceChat category and engine; switching to playback would stop the mic graph.
+                playCallTone(.outgoingWaiting, looping: true, reuseCallAudioSession: true)
+            } else {
+                stopCallTone(deactivateSession: false)
+            }
             return
         }
         guard let call else {
@@ -557,6 +605,12 @@ final class AudioSessionController: ObservableObject {
     }
 
     func deactivate() {
+        recoveryGeneration &+= 1
+        recoveryTask?.cancel()
+        recoveryTask = nil
+        playbackGeneration &+= 1
+        interrupted = false
+        receivedCarrierAudio = false
         stopRecording()
         let callKitManagedSession = sessionActivationManagedByCallKit
         sessionActivationManagedByCallKit = false
@@ -598,15 +652,17 @@ final class AudioSessionController: ObservableObject {
         refreshRouteDescription()
     }
 
-    private func playCallTone(_ tone: CallTone, looping: Bool) {
+    private func playCallTone(_ tone: CallTone, looping: Bool, reuseCallAudioSession: Bool = false) {
         guard currentCallTone != tone || callTonePlayer?.isPlaying != true else { return }
         stopCallTone()
 
         do {
             let session = AVAudioSession.sharedInstance()
             // 模块来电属于电话提醒，使用 playback 确保手机静音时仍能听到，并压低其他音频。
-            try session.setCategory(.playback, mode: .default, options: [.duckOthers])
-            try session.setActive(true)
+            if !reuseCallAudioSession {
+                try session.setCategory(.playback, mode: .default, options: [.duckOthers])
+                try session.setActive(true)
+            }
             let player = try AVAudioPlayer(data: SynthesizedCallTone.wavData(for: tone))
             player.numberOfLoops = looping ? -1 : 0
             player.volume = tone.volume
@@ -637,15 +693,17 @@ final class AudioSessionController: ObservableObject {
         switch event {
         case .connected:
             transportReady = true
+            recoverPlaybackIfNeeded()
             diagnosticDescription = "\(DeviceContext.displayName) PCM 已握手，等待语音数据"
             refreshRouteDescription()
             errorMessage = nil
         case let .statistics(statistics):
+            recoverPlaybackIfNeeded()
             let handshakeState = transportReady ? "PCM 已握手" : "PCM 尚未握手"
             let playbackDrops = playbackQueue.droppedFrames > 0
                 ? " · 播放丢弃\(playbackQueue.droppedFrames)帧"
                 : ""
-            diagnosticDescription = "\(DeviceContext.displayName) \(handshakeState) ↑\(statistics.uplinkBytes)B 峰值\(statistics.uplinkPeak) · ↓\(statistics.downlinkBytes)B 峰值\(statistics.downlinkPeak)\(playbackDrops)"
+            diagnosticDescription = "\(DeviceContext.displayName) \(handshakeState) ↑\(statistics.uplinkBytes)B 峰值\(statistics.uplinkPeak) · ↓\(statistics.downlinkBytes)B 峰值\(statistics.downlinkPeak)\(playbackDrops) · 引擎\(engine?.isRunning == true ? "运行" : "停止") 播放\(player?.isPlaying == true ? "运行" : "停止") 恢复\(recoveryCount)次"
             refreshRouteDescription()
         case let .status(message):
             // 连接状态单独显示，避免把“尚未握手”误读成模块已经拒绝握手。
@@ -679,6 +737,7 @@ final class AudioSessionController: ObservableObject {
 
     private func handleRouteChange(_ notification: Notification) {
         refreshRouteDescription()
+        recoverPlaybackIfNeeded()
         guard speakerRouteRetryTask == nil else { return }
         requestedSpeakerOverride = SpeakerRoutePolicy.requestedSpeakerAfterSystemRouteChange(
             requestedSpeaker: requestedSpeakerOverride,
@@ -689,6 +748,21 @@ final class AudioSessionController: ObservableObject {
 
     private func schedulePlayback(_ pcm: Data) {
         guard active, let player, !pcm.isEmpty else { return }
+        if !receivedCarrierAudio, pcm.withUnsafeBytes({ raw -> Bool in
+            let bytes = raw.bindMemory(to: UInt8.self)
+            for index in stride(from: 0, to: bytes.count - 1, by: 2) {
+                let sample = Int(Int16(bitPattern: UInt16(bytes[index]) | UInt16(bytes[index + 1]) << 8))
+                if abs(sample) > 128 { return true }
+            }
+            return false
+        }) {
+            receivedCarrierAudio = true
+            stopCallTone(deactivateSession: false)
+        }
+        guard engine?.isRunning == true, !interrupted else {
+            recoverPlaybackIfNeeded()
+            return
+        }
         let frames = pcm.count / MemoryLayout<Int16>.size
         guard frames > 0, playbackQueue.reserve(frames: frames) else { return }
         guard let format = AVAudioFormat(
@@ -715,13 +789,59 @@ final class AudioSessionController: ObservableObject {
                 output[frame] = Float(Int16(bitPattern: bits)) / 32_768
             }
         }
+        let generation = playbackGeneration
         player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) {
             [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.playbackQueue.complete(frames: frames)
+                guard let self, self.playbackGeneration == generation else { return }
+                self.playbackQueue.complete(frames: frames)
             }
         }
         if !player.isPlaying { player.play() }
+    }
+
+    var diagnosticReport: String {
+        "AirSIM \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "")\n\(diagnosticDescription)\n\(routeDescription)\n安卓：\(moduleDiagnosticDescription)\n错误：\(errorMessage ?? "无")"
+    }
+
+    private func recoverPlaybackIfNeeded() {
+        guard recoveryTask == nil, let engine, let player,
+              LocalAudioPlaybackPolicy.shouldRecover(
+                  active: active, interrupted: interrupted,
+                  engineRunning: engine.isRunning, playerPlaying: player.isPlaying) else { return }
+        recoveryGeneration &+= 1
+        let recoveryID = recoveryGeneration
+        recoveryTask = Task { @MainActor [weak self, weak engine, weak player] in
+            guard let self else { return }
+            defer { if self.recoveryGeneration == recoveryID { self.recoveryTask = nil } }
+            // Route/category changes can stop AVAudioEngine after start() has succeeded.
+            // Recover the existing graph without reconnecting PCM or ending the call.
+            for delay in [0.15, 0.35, 0.7] {
+                try? await Task.sleep(for: .seconds(delay))
+                guard !Task.isCancelled, self.active, !self.interrupted,
+                      let engine, let player, self.engine === engine else { return }
+                guard !engine.isRunning || !player.isPlaying else { return }
+                do {
+                    if !self.sessionActivationManagedByCallKit {
+                        try AVAudioSession.sharedInstance().setActive(true)
+                    }
+                    if !engine.isRunning {
+                        self.playbackGeneration &+= 1
+                        player.stop()
+                        self.playbackQueue.reset()
+                        engine.prepare()
+                        try engine.start()
+                    }
+                    player.play()
+                    self.recoveryCount += 1
+                    if self.errorMessage?.hasPrefix("恢复通话播放失败：") == true { self.errorMessage = nil }
+                    self.refreshRouteDescription()
+                    return
+                } catch {
+                    self.errorMessage = "恢复通话播放失败：\(error.localizedDescription)"
+                }
+            }
+        }
     }
 }
 

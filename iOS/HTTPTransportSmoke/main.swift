@@ -26,9 +26,24 @@ struct HTTPTransportSmoke {
         }
         testClockSkew()
         testEarlyMedia()
+        testPlaybackRecovery()
         print("PASS HTTP framing over TLS: complete, fragmented, chunked, trailers, EOF, truncation")
         print("PASS end confirmation across device clock skew, with stale identity/generation rejection")
         print("PASS outgoing early media without answering ringing calls or restarting ended calls")
+        print("PASS playback recovery and waiting tone handoff to carrier audio")
+    }
+
+    static func testPlaybackRecovery() {
+        precondition(LocalAudioPlaybackPolicy.shouldRecover(active: true, interrupted: false, engineRunning: false, playerPlaying: true))
+        precondition(LocalAudioPlaybackPolicy.shouldRecover(active: true, interrupted: false, engineRunning: true, playerPlaying: false))
+        precondition(!LocalAudioPlaybackPolicy.shouldRecover(active: true, interrupted: false, engineRunning: true, playerPlaying: true))
+        precondition(!LocalAudioPlaybackPolicy.shouldRecover(active: false, interrupted: false, engineRunning: false, playerPlaying: false))
+        precondition(!LocalAudioPlaybackPolicy.shouldRecover(active: true, interrupted: true, engineRunning: false, playerPlaying: false))
+        precondition(LocalAudioPlaybackPolicy.shouldPlayWaitingTone(state: "dialing", direction: "outgoing", receivedCarrierAudio: false))
+        precondition(!LocalAudioPlaybackPolicy.shouldPlayWaitingTone(state: "dialing", direction: "outgoing", receivedCarrierAudio: true))
+        precondition(!LocalAudioPlaybackPolicy.shouldPlayWaitingTone(state: "active", direction: "outgoing", receivedCarrierAudio: false))
+        precondition(!LocalAudioPlaybackPolicy.shouldPlayWaitingTone(state: "incoming", direction: "incoming", receivedCarrierAudio: false))
+        precondition(!LocalAudioPlaybackPolicy.shouldPlayWaitingTone(state: "ended", direction: "outgoing", receivedCarrierAudio: false))
     }
 
     static func testEarlyMedia() {

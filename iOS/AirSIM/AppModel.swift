@@ -1736,6 +1736,7 @@ final class AppModel: ObservableObject {
                 backgroundStandby.resumeAfterCall()
                 return
             }
+            audio.updateCallTone(for: activeCall)
             if currentCallTransport == nil {
                 let transport: CallTransport
                 switch localAPI.route {

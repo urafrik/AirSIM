@@ -42,6 +42,17 @@ enum LocalCallMediaStartupPolicy {
     }
 }
 
+enum LocalAudioPlaybackPolicy {
+    static func shouldRecover(active: Bool, interrupted: Bool, engineRunning: Bool, playerPlaying: Bool) -> Bool {
+        active && !interrupted && (!engineRunning || !playerPlaying)
+    }
+
+    static func shouldPlayWaitingTone(state: String, direction: String, receivedCarrierAudio: Bool) -> Bool {
+        direction == "outgoing" && !receivedCarrierAudio
+            && ["dialing", "alerting", "connecting"].contains(state)
+    }
+}
+
 struct CallLifecycleEvent: Equatable, Sendable {
     let callID: String
     let callUUID: UUID
