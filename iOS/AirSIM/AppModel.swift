@@ -314,7 +314,7 @@ final class AppModel: ObservableObject {
     }
 
     var connectionModePresentation: ConnectionModePresentation {
-        if UserDefaults.standard.bool(forKey: ManualDirectConfiguration.enabledKey) {
+        if vowlan.availability.endpoint?.isManual == true {
             return ConnectionModePresentation(
                 mode: vowlan.availability.isOnlineForDisplay ? .vowlan : .offline,
                 title: "远程直连",
@@ -835,9 +835,7 @@ final class AppModel: ObservableObject {
             updateLocalConnectionSummary(cellularState: modemStatus?.cellularState)
             // PushKit token 必须写入当前真正可达的 Agent。热点场景不能再固定访问 USB 地址。
             await VoIPPushController.shared.syncRegistration(with: result.api)
-            if AppRefreshPolicy.shouldRefreshSupplementalState(appIsActive: appIsActive) {
-                scheduleModuleMetadataRefresh(generation: generation, api: result.api)
-            }
+            scheduleModuleMetadataRefresh(generation: generation, api: result.api)
             let lifecycleCall = lifecycleRecord(from: status.active ?? previousCall)
             let systemCall = status.active
             let callerName = (systemCall ?? lifecycleCall).map { contacts.displayName(for: $0.number) }
@@ -1048,9 +1046,7 @@ final class AppModel: ObservableObject {
     }
 
     private func nextAgentEvent() async throws -> AgentPollResult {
-        if verifiedVoWLANAPI() == nil {
-            await vowlan.recoverIfNeeded()
-        }
+        await vowlan.recoverIfNeeded()
         guard let samsungAPI = verifiedVoWLANAPI() else {
             throw CallKitBridgeError.noReachableTransport
         }
@@ -1165,8 +1161,9 @@ final class AppModel: ObservableObject {
         defer { moduleMetadataTask = nil }
         async let radioRequest = try? api.modemStatus()
         let radio = await radioRequest
-        guard !Task.isCancelled, generation == pollingGeneration, isOnline, appIsActive else { return }
-        if let radio, modemStatus != radio { modemStatus = radio }
+        guard !Task.isCancelled, generation == pollingGeneration, isOnline else { return }
+        // A failed sample must not keep displaying an old signal indefinitely.
+        if modemStatus != radio { modemStatus = radio }
         updateLocalConnectionSummary(cellularState: radio?.cellularState ?? modemStatus?.cellularState)
         let lifecycleCall = lifecycleRecord(from: activeCall ?? remoteCall)
         await awaitCloudStatusForLiveActivity(call: lifecycleCall)
@@ -1771,9 +1768,7 @@ final class AppModel: ObservableObject {
         // VoWLAN，就复用同一已鉴权端点；绝不能把通用 isOnline 误当成 USB ECM。
         guard isOnline, !isReconnecting, let cached = lastSuccessfulLocalAPI,
               case let .vowlan(endpoint, credential) = cached.route else { return nil }
-        if UserDefaults.standard.bool(forKey: ManualDirectConfiguration.enabledKey) {
-            guard endpoint == ManualDirectConfiguration.endpoint() else { return nil }
-        } else if endpoint.isManual { return nil }
+        guard ManualDirectConfiguration.permits(endpoint) else { return nil }
         return (cached, .vowlan(endpoint: endpoint, credential: credential))
     }
 
@@ -1784,6 +1779,7 @@ final class AppModel: ObservableObject {
     ) {
         currentCallTransport = transport
         currentLocalAPI = api
+        if case let .vowlan(endpoint, _) = api.route { vowlan.lockedCallEndpoint = endpoint }
         currentPCMRoute = pcmRoute
         lockedCallTransport = LockedCallTransport(
             transport: transport,
@@ -1801,6 +1797,7 @@ final class AppModel: ObservableObject {
     }
 
     private func clearLockedTransport() {
+        vowlan.lockedCallEndpoint = nil
         currentCallTransport = nil
         currentLocalAPI = nil
         currentPCMRoute = nil

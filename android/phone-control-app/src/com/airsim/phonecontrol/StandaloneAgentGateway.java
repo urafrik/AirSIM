@@ -101,6 +101,7 @@ final class StandaloneAgentGateway {
             return switch (path) {
                 case "/api/health" -> ok(health());
                 case "/api/android/status" -> ok(status());
+                case "/api/status" -> ok(AndroidRadioStatus.snapshot(context).toString());
                 case "/api/push/status" -> ok(pushStatus());
                 case "/api/debug" -> ok(debugSnapshot());
                 case "/api/calls/status" -> ok(callSnapshot().toString());

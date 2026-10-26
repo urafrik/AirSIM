@@ -421,7 +421,7 @@ final class AirSIMTests: XCTestCase {
         XCTAssertThrowsError(try ManualDirectConfiguration.save(host: "evil/path", control: "443", pcm: "17593", defaults: defaults))
         XCTAssertThrowsError(try ManualDirectConfiguration.save(host: "example.com", control: "65536", pcm: "17593", defaults: defaults))
         XCTAssertEqual(ManualDirectConfiguration.endpoint(defaults: defaults), saved)
-        defaults.set(false, forKey: ManualDirectConfiguration.enabledKey)
+        ManualDirectConfiguration.setMode(.lanOnly, defaults: defaults)
         XCTAssertNil(ManualDirectConfiguration.endpoint(defaults: defaults))
     }
 

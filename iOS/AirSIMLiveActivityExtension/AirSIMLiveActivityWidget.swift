@@ -410,9 +410,7 @@ struct AirSIMLiveActivityWidget: Widget {
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.green)
         case .standby:
-            Image(systemName: "cellularbars")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.white)
+            signalBars(dbm: state.signalDBM)
         case .cloudStandby:
             Image(systemName: "checkmark.icloud.fill")
                 .font(.caption.weight(.semibold))
@@ -429,19 +427,7 @@ struct AirSIMLiveActivityWidget: Widget {
     }
 
     private func signalBars(dbm: Int?) -> some View {
-        let strength: Int
-        let measured = dbm ?? -120
-        if measured >= -79 {
-            strength = 4
-        } else if measured >= -89 {
-            strength = 3
-        } else if measured >= -99 {
-            strength = 2
-        } else if measured >= -109 {
-            strength = 1
-        } else {
-            strength = 0
-        }
+        let strength = CellularSignalDisplay.bars(dbm: dbm)
         return HStack(alignment: .bottom, spacing: 2) {
             ForEach(0..<4, id: \.self) { index in
                 Capsule()

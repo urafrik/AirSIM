@@ -117,6 +117,7 @@ enum LiveActivityStateBuilder {
 @MainActor
 final class LiveActivityController {
     private var activity: Activity<AirSIMCallActivityAttributes>?
+    private var lastUpdateAt = Date.distantPast
     private var lastState: AirSIMCallActivityAttributes.ContentState?
     private let idleStartedAt = Date()
     private var enabled = true
@@ -181,7 +182,7 @@ final class LiveActivityController {
                     attributes: AirSIMCallActivityAttributes(moduleName: "AirSIM"),
                     content: ActivityContent(
                         state: initialState,
-                        staleDate: nil
+                        staleDate: Date().addingTimeInterval(60)
                     ),
                     pushType: LiveActivityCreationPolicy.pushType(
                         localModeEnabled: LocalModePreference.isEnabled()
@@ -193,6 +194,7 @@ final class LiveActivityController {
 #if DEBUG
                 print("[AirSIM LiveActivity] created id=\(activity?.id ?? "none") phase=\(initialState.phase.rawValue)")
 #endif
+                lastUpdateAt = Date()
                 lastState = initialState
             } catch {
 #if DEBUG
@@ -214,16 +216,17 @@ final class LiveActivityController {
                 uploadBytesPerSecond: uploadBytesPerSecond
             )
             // 在线/离线由真实模块请求决定；不以 ActivityKit stale 代替连通性探测。
-            guard nextState != lastState else { return }
+            guard nextState != lastState || Date().timeIntervalSince(lastUpdateAt) >= 30 else { return }
             await activity.update(
                 ActivityContent(
                     state: nextState,
-                    staleDate: nil
+                    staleDate: Date().addingTimeInterval(60)
                 )
             )
 #if DEBUG
             print("[AirSIM LiveActivity] updated id=\(activity.id) phase=\(nextState.phase.rawValue)")
 #endif
+            lastUpdateAt = Date()
             lastState = nextState
         }
     }

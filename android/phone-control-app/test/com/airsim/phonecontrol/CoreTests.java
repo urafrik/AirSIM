@@ -2,6 +2,8 @@ package com.airsim.phonecontrol;
 
 public final class CoreTests {
     public static void main(String[] args) throws Exception {
+        assertTrue(VoWLANControlPolicy.allowed("GET", "/api/status"));
+        assertTrue(!VoWLANControlPolicy.allowed("POST", "/api/status"));
 		assertTransientMuteFailureRetriesAndRestorationCancelsStaleRetry();
 		assertMutedCallRecoversAfterThreeTransientAudioFailures();
 		assertLiveStatusPollerUpdatesWithoutRebuildingPage();

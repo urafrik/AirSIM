@@ -94,6 +94,7 @@ struct AirSIMSettingsView: View {
     @State private var directControl = UserDefaults.standard.string(forKey: ManualDirectConfiguration.controlKey) ?? "17592"
     @State private var directPCM = UserDefaults.standard.string(forKey: ManualDirectConfiguration.pcmKey) ?? "17593"
     @State private var directPin = UserDefaults.standard.string(forKey: ManualDirectConfiguration.pinKey) ?? ManualDirectConfiguration.defaultCertificateSHA256
+    @AppStorage(ManualDirectConfiguration.modeKey) private var directMode = DirectConnectionMode.automatic.rawValue
     @State private var directMessage: String?
     @State private var recordings: [URL] = []
     @State private var message: String?
@@ -133,6 +134,16 @@ struct AirSIMSettingsView: View {
                 }
 
                 Section {
+                    Picker("连接选择", selection: $directMode) {
+                        ForEach(DirectConnectionMode.allCases) { mode in
+                            Text(mode.title).tag(mode.rawValue)
+                        }
+                    }
+                    .onChange(of: directMode) { value in
+                        ManualDirectConfiguration.setMode(DirectConnectionMode(rawValue: value) ?? .automatic)
+                        model.reloadDirectConnection()
+                        directMessage = "连接选择已更新，正在重新验证。"
+                    }
                     TextField("域名或 IPv4（例如 airsim.example.com）", text: $directHost)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
@@ -145,7 +156,7 @@ struct AirSIMSettingsView: View {
                         .keyboardType(.asciiCapable)
                     Button("保存并连接") {
                         do {
-                            try ManualDirectConfiguration.save(host: directHost, control: directControl, pcm: directPCM, certificateSHA256: directPin)
+                            try ManualDirectConfiguration.save(host: directHost, control: directControl, pcm: directPCM, certificateSHA256: directPin, connectionMode: DirectConnectionMode(rawValue: directMode) ?? .automatic)
                             localModeEnabled = true
                             cloudModeEnabled = false
                             model.setLocalModeEnabled(true)
@@ -153,17 +164,12 @@ struct AirSIMSettingsView: View {
                             directMessage = "已保存；请查看连接状态确认鉴权结果"
                         } catch { directMessage = error.localizedDescription }
                     }
-                    Button("停用远程直连，恢复局域网发现") {
-                        UserDefaults.standard.set(false, forKey: ManualDirectConfiguration.enabledKey)
-                        model.reloadDirectConnection()
-                        directMessage = "已恢复自动发现"
-                    }
-                    LabeledContent("手动端点", value: ManualDirectConfiguration.endpoint() == nil ? "未启用" : "已配置 TLS，连通性见连接状态")
+                    LabeledContent("公网备用地址", value: ManualDirectConfiguration.savedEndpoint() == nil ? "尚未保存" : (directMode == DirectConnectionMode.lanOnly.rawValue ? "已保存，当前仅使用局域网" : "已保存，自动验证后连接"))
                     if let directMessage { Text(directMessage).font(.footnote) }
                 } header: {
                     Text("frp / 内网穿透直连")
                 } footer: {
-                    Text("先在同一局域网配对。两个端口都需要 TLS 网关。自签证书须填写服务器证书的 SHA256 指纹；不符即拒绝连接。留空时使用系统 CA 验证。音频端口为 TLS/TCP，不是 HTTPS。保存后使用这里的地址连接安卓手机，并停用云端中继。请保持电脑网关和安卓服务运行。通话中不能修改端点。")
+                    Text("先在同一局域网配对。两个端口都需要 TLS 网关。自签证书须填写服务器证书的 SHA256 指纹；不符即拒绝连接。留空时使用系统 CA 验证。音频端口为 TLS/TCP，不是 HTTPS。自动模式优先局域网，离开后回退到已保存的公网地址，回到局域网后重新验证并优先使用局域网。切换前仍会校验证书和配对身份；通话进行中保持原链路，不跨网络迁移。请保持电脑网关和安卓服务运行。通话中不能修改端点。")
                 }
                 .disabled(model.callLifecycleSnapshot.state.representsCall)
 

@@ -4,7 +4,7 @@ import java.util.Set;
 
 public final class VoWLANControlPolicy {
     private static final Set<String> GET_ROUTES = Set.of(
-            "/v1/health", "/api/health", "/api/events", "/api/calls/status", "/api/calls/events",
+            "/v1/health", "/api/health", "/api/status", "/api/events", "/api/calls/status", "/api/calls/events",
             "/api/calls/audio/host/config", "/api/push/status", "/api/sms", "/api/sms/status");
     private static final Set<String> POST_ROUTES = Set.of(
             "/api/calls/dial", "/api/calls/answer", "/api/calls/reject",

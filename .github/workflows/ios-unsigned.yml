@@ -81,6 +81,21 @@ jobs:
           swiftc -parse-as-library -swift-version 5 iOS/Shared/PinnedTLS.swift iOS/AirSIM/WiredHTTPTransport.swift iOS/AirSIM/CallLifecycleStore.swift iOS/HTTPTransportSmoke/main.swift -o "$BUILD_DIR/http-smoke"
           "$BUILD_DIR/http-smoke" "$BUILD_DIR/http-fixture" | tee "$BUILD_DIR/http-tests.log"
 
+      - name: Verify automatic routing and signal display
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          source = Path('iOS/AirSIM/VoWLANController.swift').read_text()
+          endpoint = source.split('struct VoWLANEndpoint:', 1)[1].split('struct VoWLANDiscoveredAgent:', 1)[0]
+          config = source.split('enum ManualDirectConfiguration {', 1)[1].split('@MainActor\nenum VoWLANProbeRecovery', 1)[0]
+          Path(os.environ['BUILD_DIR'], 'RoutingFixture.swift').write_text('import Foundation\nimport Network\nstruct VoWLANEndpoint:' + endpoint + 'enum ManualDirectConfiguration {' + config)
+          PY
+          swiftc -parse-as-library -swift-version 5 iOS/Shared/PinnedTLS.swift iOS/Shared/DirectConnectionPolicy.swift "$BUILD_DIR/RoutingFixture.swift" iOS/RoutingSmoke/main.swift -o "$BUILD_DIR/routing-smoke"
+          "$BUILD_DIR/routing-smoke" | tee "$BUILD_DIR/routing-tests.log"
+
       - name: Archive for physical iPhone without signing
         shell: bash
         run: |

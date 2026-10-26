@@ -117,7 +117,15 @@ extension AirSIMCallActivityAttributes.ContentState {
     /// ActivityKit 的 stale 只表示主 App 暂时没有提交新内容，不能证明 USB 模块离线。
     /// 模块离线由主 App 的真实 HTTP 探测失败显式写入 `.offline`。
     func liveActivityDisplayState(isStale: Bool) -> Self {
-        self
+        guard isStale else { return self }
+        // Keep connection/call facts, but do not present an old measurement as current signal.
+        return .init(callID: callID, number: number, displayName: displayName,
+                     phase: phase, startedAt: startedAt, transport: transport,
+                     downloadBytesPerSecond: downloadBytesPerSecond,
+                     uploadBytesPerSecond: uploadBytesPerSecond,
+                     agentDeviceName: agentDeviceName, agentPhoneNumber: agentPhoneNumber,
+                     agentKind: agentKind, pairedAgentCount: pairedAgentCount,
+                     vowlanOnline: vowlanOnline, cloudOnline: cloudOnline)
     }
 }
 
