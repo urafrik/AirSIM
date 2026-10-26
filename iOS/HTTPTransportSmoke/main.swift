@@ -25,8 +25,23 @@ struct HTTPTransportSmoke {
             precondition(rejected, "Truncated response must not confirm hangup")
         }
         testClockSkew()
+        testEarlyMedia()
         print("PASS HTTP framing over TLS: complete, fragmented, chunked, trailers, EOF, truncation")
         print("PASS end confirmation across device clock skew, with stale identity/generation rejection")
+        print("PASS outgoing early media without answering ringing calls or restarting ended calls")
+    }
+
+    static func testEarlyMedia() {
+        for state in ["dialing", "alerting", "connecting"] {
+            precondition(LocalCallMediaStartupPolicy.shouldStart(state: state, direction: "outgoing", lifecycle: .connecting))
+            precondition(!LocalCallMediaStartupPolicy.shouldStart(state: state, direction: "incoming", lifecycle: .connecting))
+        }
+        precondition(LocalCallMediaStartupPolicy.shouldStart(state: "active", direction: "incoming", lifecycle: .active))
+        precondition(!LocalCallMediaStartupPolicy.shouldStart(state: "incoming", direction: "incoming", lifecycle: .ringing))
+        for lifecycle: CallLifecycleState in [.idle, .ending, .ended, .failed] {
+            precondition(!LocalCallMediaStartupPolicy.shouldStart(state: "dialing", direction: "outgoing", lifecycle: lifecycle))
+            precondition(!LocalCallMediaStartupPolicy.shouldStart(state: "active", direction: "outgoing", lifecycle: lifecycle))
+        }
     }
 
     static func testClockSkew() {

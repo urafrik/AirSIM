@@ -35,7 +35,7 @@ enum LocalAgentRoute: Equatable, Sendable {
     }
 }
 
-/// AirSIM 不允许把旧模块 USB ECM 地址当作三星控制通道。
+/// AirSIM 不允许把旧模块 USB ECM 地址当作安卓手机控制通道。
 enum AirSIMRoutePolicy {
     static func permits(_ route: LocalAgentRoute) -> Bool {
         if case .vowlan = route { return true }

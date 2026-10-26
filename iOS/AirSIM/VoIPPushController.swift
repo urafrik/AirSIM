@@ -259,7 +259,7 @@ struct ConnectionModePresentation: Equatable, Sendable {
                 mode: .vowlan,
                 title: "VoWLAN",
                 status: "已连接",
-                detail: cloudOnline ? "局域网优先，云端可回退" : "同一 Wi-Fi / 三星热点"
+                detail: cloudOnline ? "局域网优先，云端可回退" : "同一 Wi-Fi / 安卓手机热点"
             )
         }
         if cloudModeEnabled {

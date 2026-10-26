@@ -887,7 +887,10 @@ final class AppModel: ObservableObject {
 
             // 接通期间持续确认本地音频仍在工作。CallKit 或系统音频服务重置后，
             // 即使模块状态没有发生变化，下一轮也必须能够重建网络 PCM。
-            if status.active?.state == "active" {
+            if let call = status.active,
+               LocalCallMediaStartupPolicy.shouldStart(
+                   state: call.state, direction: call.direction,
+                   lifecycle: callLifecycleSnapshot.state) {
                 await startCallAudioIfReady()
             } else if status.active == nil, previousCall != nil {
                 // 远端挂断不会经过 App 的挂断按钮；同样开启切换保护，避免媒体路由
@@ -943,7 +946,7 @@ final class AppModel: ObservableObject {
             ) else { return }
 
             // 用最后实际成功的本地路线复核健康状态。VoWLAN 的长轮询偶发断开时，
-            // 不能再转去探测 USB 默认地址并据此把三星 Agent 判为离线。
+            // 不能再转去探测 USB 默认地址并据此把安卓手机 Agent 判为离线。
             let healthAPI = lastSuccessfulLocalAPI ?? verifiedVoWLANAPI()
             let health = try? await healthAPI?.health()
             guard ModuleConnectivityPolicy.shouldMarkOffline(
@@ -1329,7 +1332,7 @@ final class AppModel: ObservableObject {
             await IPhoneCloudCallSession.shared.end()
             return
         }
-        if let localAPI = reachableLocalAPI {
+        if let localAPI = localCallControlAPI {
             _ = try await localAPI.rejectCall(callID: activeCall?.id)
             return
         }
@@ -1346,7 +1349,7 @@ final class AppModel: ObservableObject {
             await IPhoneCloudCallSession.shared.end()
             return
         }
-        guard let localAPI = reachableLocalAPI else {
+        guard let localAPI = localCallControlAPI else {
             throw CallKitBridgeError.noReachableTransport
         }
         let endingCallID = activeCall?.id ?? callLifecycleSnapshot.callID
@@ -1696,7 +1699,12 @@ final class AppModel: ObservableObject {
             return
         }
         guard !managedByCallKit || callKit.audioSessionIsActive else { return }
-        guard callLifecycleSnapshot.state == .active, !audio.active, !startingCallAudio else { return }
+        guard let mediaCall = activeCall,
+              callLifecycleSnapshot.callID == mediaCall.id,
+              LocalCallMediaStartupPolicy.shouldStart(
+                  state: mediaCall.state, direction: mediaCall.direction,
+                  lifecycle: callLifecycleSnapshot.state),
+              !audio.active, !startingCallAudio else { return }
         startingCallAudio = true
         defer { startingCallAudio = false }
         backgroundStandby.suspendForCall()
@@ -1708,6 +1716,8 @@ final class AppModel: ObservableObject {
                 return
             }
             let pcmRoute = currentPCMRoute ?? Self.pcmRoute(for: localAPI.route)
+            // Prefer carrier ringback/announcements over the app's synthetic waiting tone.
+            audio.stopCallTone()
             // 先完成麦克风授权和 AVAudioEngine 启动，再让 Agent 开始等待 PCM
             // 客户端。否则首次授权停留超过 Agent 的等待窗口时，helper 会被提前杀死。
             let outcome = try await LocalCallAudioStartupCoordinator.start(
@@ -2265,7 +2275,7 @@ extension AppModel: CallKitActionHandling {
         }
         if currentCallTransport == .vowlan,
            case .unavailable = vowlan.availability {
-            // 三星端在热点接口消失时直接通过 Telecom 结束所属通话；这里让
+            // 安卓手机端在热点接口消失时直接通过 Telecom 结束所属通话；这里让
             // CallKit 事务立即成功，避免因已断开的控制 socket 把系统界面卡住。
             clearLockedTransport()
             backgroundStandby.resumeAfterCall()

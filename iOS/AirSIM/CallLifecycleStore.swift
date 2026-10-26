@@ -32,6 +32,16 @@ enum CallLifecycleSource: String, Codable, Equatable, Sendable {
     case relay
 }
 
+/// Carrier announcements and voicemail redirects may play before Telecom reports ACTIVE.
+/// Starting media never marks the call answered, and must not open an incoming ringing mic.
+enum LocalCallMediaStartupPolicy {
+    static func shouldStart(state: String, direction: String, lifecycle: CallLifecycleState) -> Bool {
+        if state == "active" { return lifecycle == .active }
+        return direction == "outgoing" && lifecycle == .connecting
+            && ["dialing", "alerting", "connecting"].contains(state)
+    }
+}
+
 struct CallLifecycleEvent: Equatable, Sendable {
     let callID: String
     let callUUID: UUID

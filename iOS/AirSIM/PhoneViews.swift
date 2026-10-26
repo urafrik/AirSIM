@@ -51,7 +51,7 @@ struct DialPadTransportPresentation: Equatable {
         if vowlanOnline {
             return DialPadTransportPresentation(
                 title: "VoWLAN",
-                detail: "拨号及通话音频将通过同一 Wi-Fi 或三星热点",
+                detail: "拨号及通话音频将通过同一 Wi-Fi 或安卓手机热点",
                 systemImage: "wifi",
                 transport: .vowlan
             )
@@ -907,6 +907,7 @@ private struct MessageThreadView: View {
                                     spacing: 3
                                 ) {
                                     Text(message.content)
+                                        .textSelection(.enabled)
                                         .padding(.horizontal, 14)
                                         .padding(.vertical, 9)
                                         .background(
@@ -916,6 +917,13 @@ private struct MessageThreadView: View {
                                             in: RoundedRectangle(cornerRadius: 18)
                                         )
                                         .foregroundStyle(message.isOutgoing ? .white : .primary)
+                                        .contextMenu {
+                                            Button {
+                                                UIPasteboard.general.string = message.content
+                                            } label: {
+                                                Label("复制短信", systemImage: "doc.on.doc")
+                                            }
+                                        }
                                     if message.isOutgoing {
                                         Text(L10n.t("已发送"))
                                             .font(.caption2)

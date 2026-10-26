@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// AirSIM 只引导三星配对；不检查旧模块 USB ECM、AT 或 QDC507 固件。
+/// AirSIM 只引导安卓手机配对；不检查旧模块 USB ECM、AT 或 QDC507 固件。
 struct AirSIMFirstConnectionView: View {
     @EnvironmentObject private var model: AppModel
     @AppStorage("airsim.first-connection-complete") private var completed = false
@@ -18,39 +18,32 @@ struct AirSIMFirstConnectionView: View {
                     .background(.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 22))
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("连接三星手机")
+                    Text("连接安卓手机")
                         .font(.largeTitle.bold())
-                    Text("AirSIM 通过同一 Wi-Fi 或三星热点建立 VoWLAN；离开局域网时可使用独立云端 Relay。")
+                    Text("通过同一 Wi-Fi 或安卓手机热点连接；外出时可在设置中配置 frp 远程直连。")
                         .foregroundStyle(.secondary)
                 }
 
                 VStack(alignment: .leading, spacing: 18) {
-                    Label("在三星手机启动 AirSIM 和音频桥", systemImage: "1.circle.fill")
+                    Label("在安卓手机启动 AirSIM 和音频桥", systemImage: "1.circle.fill")
                     Label("将两台设备连接到同一局域网", systemImage: "2.circle.fill")
-                    Label("输入三星显示的六位配对码", systemImage: "3.circle.fill")
+                    Label("输入安卓手机显示的六位配对码", systemImage: "3.circle.fill")
                 }
                 .font(.body.weight(.medium))
                 .padding(20)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24))
 
-                Toggle(isOn: $localModeEnabled) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Label("仅本地模式", systemImage: "wifi")
-                            .font(.headline)
-                        Text("只使用 VoWLAN，不需要 Relay、PushKit 或 CallKit")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .onChange(of: localModeEnabled) { enabled in
-                    if enabled { cloudModeEnabled = false }
-                    model.setLocalModeEnabled(enabled)
-                }
+                Label("配对后可接打电话、收发短信", systemImage: "checkmark.shield")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
 
                 Spacer()
 
                 Button("开始配对", systemImage: "lock.shield") {
+                    localModeEnabled = true
+                    cloudModeEnabled = false
+                    model.setLocalModeEnabled(true)
                     showingPairing = true
                 }
                 .buttonStyle(.borderedProminent)
@@ -112,22 +105,9 @@ struct AirSIMSettingsView: View {
         NavigationStack {
             Form {
                 Section {
-                    Toggle(isOn: $localModeEnabled) {
-                        Label("仅本地模式", systemImage: "wifi")
-                    }
-                    .onChange(of: localModeEnabled) { enabled in
-                        selfTestTask?.cancel()
-                        selfTestPhase = .idle
-                        selfTestReport = nil
-                        if enabled { cloudModeEnabled = false }
-                        model.setLocalModeEnabled(enabled)
-                    }
-                } header: {
-                    Text("运行模式")
+                    LabeledContent("连接方式", value: cloudRelayEnabled ? "直连优先，云端备用" : "安卓直连")
                 } footer: {
-                    Text(localModeEnabled
-                        ? "使用局域网 VoWLAN 或已配置的远程直连。不会注册 Relay、APNs、PushKit 或 CallKit。"
-                        : "关闭后可按需启用云端 Relay、PushKit 和 CallKit。")
+                    Text("安卓直连支持局域网和 frp 外网连接。你目前的 frp 方案无需启用云端中继；云端关闭时不能保证锁屏后台来电唤醒。")
                 }
 
                 Section("当前连接") {
@@ -137,7 +117,7 @@ struct AirSIMSettingsView: View {
                     LabeledContent(
                         "云端 Relay",
                         value: localModeEnabled
-                            ? "本地模式已关闭"
+                            ? "已关闭（使用直连）"
                             : (!cloudModeEnabled
                             ? "已关闭"
                             : (model.cloudAgentStatus?.cloudOnline == true ? "Agent 在线" : "不可达"))
@@ -163,11 +143,12 @@ struct AirSIMSettingsView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.asciiCapable)
-                    Button("保存并启用仅直连（停用云端）") {
+                    Button("保存并连接") {
                         do {
                             try ManualDirectConfiguration.save(host: directHost, control: directControl, pcm: directPCM, certificateSHA256: directPin)
                             localModeEnabled = true
                             cloudModeEnabled = false
+                            model.setLocalModeEnabled(true)
                             model.reloadDirectConnection()
                             directMessage = "已保存；请查看连接状态确认鉴权结果"
                         } catch { directMessage = error.localizedDescription }
@@ -182,16 +163,16 @@ struct AirSIMSettingsView: View {
                 } header: {
                     Text("frp / 内网穿透直连")
                 } footer: {
-                    Text("先在同一局域网配对。两个端口都需要 TLS 网关。自签证书须填写服务器证书的 SHA256 指纹；不符即拒绝连接。留空时使用系统 CA 验证。音频端口为 TLS/TCP，不是 HTTPS。启用后优先使用手动端点，不依赖 Bonjour；关闭云端模式可避免 Relay 回退。完全停用 Relay 后，仅能在 App 活跃时接听来电，不能保证锁屏后台来电唤醒。通话中不能修改端点。")
+                    Text("先在同一局域网配对。两个端口都需要 TLS 网关。自签证书须填写服务器证书的 SHA256 指纹；不符即拒绝连接。留空时使用系统 CA 验证。音频端口为 TLS/TCP，不是 HTTPS。保存后使用这里的地址连接安卓手机，并停用云端中继。请保持电脑网关和安卓服务运行。通话中不能修改端点。")
                 }
                 .disabled(model.callLifecycleSnapshot.state.representsCall)
 
-                Section("三星连接") {
+                Section("安卓手机连接") {
                     LabeledContent("VoWLAN", value: VoWLANStatusCopy.text(for: model.vowlan.availability))
                     NavigationLink {
                         SamsungPairingView()
                     } label: {
-                        Label("配对三星手机", systemImage: "personalhotspot")
+                        Label("配对安卓手机", systemImage: "personalhotspot")
                     }
                     Button("重新发现", systemImage: "arrow.clockwise") {
                         model.vowlan.restartBrowsing()
@@ -213,91 +194,73 @@ struct AirSIMSettingsView: View {
                 }
 
                 Section {
-                    Toggle(isOn: $cloudModeEnabled) {
-                        Label("远程通话与短信", systemImage: "cloud")
-                    }
-                    .disabled(localModeEnabled)
-                    .onChange(of: cloudModeEnabled) { enabled in
-                        selfTestTask?.cancel()
-                        selfTestPhase = .idle
-                        selfTestReport = nil
-                        Task {
-                            if let (api, _) = await model.readyVoWLANRoute() {
-                                await VoIPPushController.shared.setCloudModeEnabled(enabled, with: api)
-                            } else {
-                                await VoIPPushController.shared.setCloudModeEnabled(enabled)
-                            }
-                            await model.refreshCloudStatusForDiagnostics()
-                        }
-                    }
+                    DisclosureGroup("云端中继（Relay，高级设置）") {
+                        Text("Relay 是另行部署的云端服务，可中转通话、短信，并配合 Apple 推送唤醒来电。它与 frp 穿透是两套方案；仅填写地址不能自动获得后台来电功能。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
 
-                    TextField("https://relay.example.com", text: $relayURL)
-                        .keyboardType(.URL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .disabled(localModeEnabled)
-                    Button("保存 Relay 地址") {
-                        VoIPPushController.shared.updateRelayURL(relayURL)
-                        selfTestTask?.cancel()
-                        selfTestPhase = .idle
-                        selfTestReport = nil
-                        Task {
-                            if let (api, _) = await model.readyVoWLANRoute() {
-                                await VoIPPushController.shared.syncRegistration(with: api)
-                            }
-                            await model.refreshCloudStatusForDiagnostics()
-                        }
-                        message = "地址已保存；配对后自动注册。"
-                    }
-                    .disabled(localModeEnabled)
-                    if let message { Text(message).foregroundStyle(.secondary) }
-                } header: {
-                    Text("云端 Relay")
-                } footer: {
-                    Text("云端关闭后可使用 VoWLAN 或手动远程直连；后台来电唤醒仍需要自建 Relay 与 APNs。")
-                }
+                        Toggle("启用云端备用与推送", isOn: Binding(
+                            get: { cloudRelayEnabled },
+                            set: { updateCloudRelay(enabled: $0) }
+                        ))
 
-                Section {
-                    Button {
-                        startCloudSelfTest()
-                    } label: {
-                        HStack {
-                            Label("运行云端模式自检", systemImage: "stethoscope")
-                            Spacer()
-                            if selfTestPhase == .running {
-                                ProgressView()
+                        if cloudRelayEnabled {
+                            TextField("自建服务地址：https://relay.example.com", text: $relayURL)
+                                .keyboardType(.URL)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                            Button("保存中继地址") {
+                                VoIPPushController.shared.updateRelayURL(relayURL)
+                                resetCloudSelfTest()
+                                Task {
+                                    if let (api, _) = await model.readyVoWLANRoute() {
+                                        await VoIPPushController.shared.syncRegistration(with: api)
+                                    }
+                                    await model.refreshCloudStatusForDiagnostics()
+                                }
+                                message = "地址已保存；请运行自检确认服务和推送配置。"
                             }
-                        }
-                    }
-                    .disabled(localModeEnabled || selfTestPhase == .running)
+                            if let message { Text(message).foregroundStyle(.secondary) }
 
-                    if let report = selfTestReport {
-                        ForEach(report.steps) { step in
-                            HStack(alignment: .top, spacing: 12) {
-                                Image(systemName: selfTestSymbol(for: step.state))
-                                    .foregroundStyle(selfTestColor(for: step.state))
-                                    .frame(width: 20)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(step.title)
-                                    Text(step.detail)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                            Button {
+                                startCloudSelfTest()
+                            } label: {
+                                HStack {
+                                    Label("检查云端服务与推送", systemImage: "stethoscope")
+                                    Spacer()
+                                    if selfTestPhase == .running { ProgressView() }
+                                }
+                            }
+                            .disabled(selfTestPhase == .running)
+
+                            if let report = selfTestReport {
+                                ForEach(report.steps) { step in
+                                    HStack(alignment: .top, spacing: 12) {
+                                        Image(systemName: selfTestSymbol(for: step.state))
+                                            .foregroundStyle(selfTestColor(for: step.state))
+                                            .frame(width: 20)
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(step.title)
+                                            Text(step.detail)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                }
+                                if selfTestPhase == .completed {
+                                    Text(report.allPassed ? "云端服务自检通过" : "自检未通过，请检查失败项目")
+                                        .font(.footnote.weight(.medium))
+                                        .foregroundStyle(report.allPassed ? .green : .orange)
                                 }
                             }
                         }
-                        if selfTestPhase == .completed {
-                            Text(report.allPassed ? "云端模式自检通过" : "自检未通过，请按失败步骤修复后重试")
-                                .font(.footnote.weight(.medium))
-                                .foregroundStyle(report.allPassed ? .green : .orange)
-                        }
                     }
-                } header: {
-                    Text("云端模式自检")
                 } footer: {
-                    Text(localModeEnabled
-                        ? "本地模式不运行云端自检。"
-                        : "依次验证本机 Push 凭据、AirSIM Relay 身份、设备注册和 Agent 最近 90 秒心跳；不会拨号或发送短信。")
+                    Text(model.callLifecycleSnapshot.state.representsCall
+                        ? "通话中不能切换连接方式。"
+                        : "使用 frp 时保持关闭即可。开启前需自行部署 Relay 并配置推送。")
                 }
+                .disabled(model.callLifecycleSnapshot.state.representsCall)
 
                 Section {
                     ForEach(recordings, id: \.self) { file in
@@ -313,7 +276,8 @@ struct AirSIMSettingsView: View {
                 }
 
                 Section("关于") {
-                    LabeledContent("项目", value: "AirSIM · Samsung")
+                    LabeledContent("项目", value: "AirSIM · Android")
+                    LabeledContent("版本", value: "\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "") (\(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""))")
                     Picker("外观", selection: $settings.appearance) {
                         ForEach(AppAppearance.allCases) { appearance in
                             Text(appearance.title).tag(appearance)
@@ -333,6 +297,29 @@ struct AirSIMSettingsView: View {
                 selfTestTask = nil
                 if selfTestPhase == .running { selfTestPhase = .idle }
             }
+        }
+    }
+
+    private var cloudRelayEnabled: Bool { !localModeEnabled && cloudModeEnabled }
+
+    private func resetCloudSelfTest() {
+        selfTestTask?.cancel()
+        selfTestPhase = .idle
+        selfTestReport = nil
+    }
+
+    private func updateCloudRelay(enabled: Bool) {
+        resetCloudSelfTest()
+        localModeEnabled = !enabled
+        cloudModeEnabled = enabled
+        model.setLocalModeEnabled(!enabled)
+        Task {
+            if let (api, _) = await model.readyVoWLANRoute() {
+                await VoIPPushController.shared.setCloudModeEnabled(enabled, with: api)
+            } else {
+                await VoIPPushController.shared.setCloudModeEnabled(enabled)
+            }
+            await model.refreshCloudStatusForDiagnostics()
         }
     }
 
