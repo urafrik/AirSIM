@@ -95,6 +95,11 @@ struct AirSIMSettingsView: View {
     @State private var directPCM = UserDefaults.standard.string(forKey: ManualDirectConfiguration.pcmKey) ?? "17593"
     @State private var directPin = UserDefaults.standard.string(forKey: ManualDirectConfiguration.pinKey) ?? ManualDirectConfiguration.defaultCertificateSHA256
     @AppStorage(ManualDirectConfiguration.modeKey) private var directMode = DirectConnectionMode.automatic.rawValue
+    @AppStorage(UDPOpusConfiguration.enabledKey) private var udpEnabled = false
+    @State private var udpHost = UserDefaults.standard.string(forKey: UDPOpusConfiguration.hostKey) ?? "vip.gz.frp.one"
+    @State private var udpPort = String(UserDefaults.standard.integer(forKey: UDPOpusConfiguration.portKey) == 0 ? 17594 : UserDefaults.standard.integer(forKey: UDPOpusConfiguration.portKey))
+    @State private var udpKey = ""
+    @State private var udpMessage: String?
     @State private var directMessage: String?
     @State private var recordings: [URL] = []
     @State private var message: String?
@@ -172,6 +177,26 @@ struct AirSIMSettingsView: View {
                     Text("先在同一局域网配对。两个端口都需要 TLS 网关。自签证书须填写服务器证书的 SHA256 指纹；不符即拒绝连接。留空时使用系统 CA 验证。音频端口为 TLS/TCP，不是 HTTPS。自动模式优先局域网，离开后回退到已保存的公网地址，回到局域网后重新验证并优先使用局域网。切换前仍会校验证书和配对身份；通话进行中保持原链路，不跨网络迁移。请保持电脑网关和安卓服务运行。通话中不能修改端点。")
                 }
                 .disabled(model.callLifecycleSnapshot.state.representsCall)
+
+                Section {
+                    Toggle("启用 UDP / Opus 测试", isOn: $udpEnabled)
+                    TextField("音频网关域名或 IPv4", text: $udpHost)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    TextField("UDP 公网端口", text: $udpPort).keyboardType(.numberPad)
+                    SecureField("网关密钥（64 位十六进制）", text: $udpKey)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    Button("保存 UDP 测试配置") {
+                        do {
+                            try UDPOpusConfiguration.save(host: udpHost, port: udpPort, key: udpKey)
+                            udpKey = ""
+                            udpMessage = "已保存，下一通电话生效。请确认电脑网关与 UDP 映射已启动。"
+                        } catch { udpMessage = error.localizedDescription }
+                    }
+                    if let udpMessage { Text(udpMessage).font(.footnote) }
+                } header: {
+                    Text("实验音频：UDP / Opus")
+                } footer: { Text("测试开关开启时，所有直连通话的音频都走此网关（包括局域网通话）。控制与短信仍走原连接。UDP 不经过 stunnel，使用独立密钥加密。失败时会明确报错；关闭测试开关后重新通话即可恢复 TCP。网关密钥保存在本机钥匙串。") }
+                  .disabled(model.callLifecycleSnapshot.state.representsCall)
 
                 Section("安卓手机连接") {
                     LabeledContent("VoWLAN", value: VoWLANStatusCopy.text(for: model.vowlan.availability))

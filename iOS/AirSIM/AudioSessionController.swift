@@ -236,7 +236,7 @@ final class AudioSessionController: ObservableObject {
 
     private var engine: AVAudioEngine?
     private var player: AVAudioPlayerNode?
-    private var transport: NetworkPCMTransport?
+    private var transport: (any CallPCMTransport)?
     private var encoder: VoicePCMEncoder?
     private let callRecorder = LocalCallPCMRecorder()
     private var callTonePlayer: AVAudioPlayer?
@@ -361,21 +361,30 @@ final class AudioSessionController: ObservableObject {
                 handshakeSequence = PCMHandshakeSequence { try route.handshake() }
             }
             let callRecorder = self.callRecorder
-            let transport = NetworkPCMTransport(
+            let onPCM: @Sendable (Data) -> Void = { [weak self, callRecorder] pcm in
+                callRecorder.append(pcm, uplink: false)
+                Task { @MainActor [weak self] in self?.schedulePlayback(pcm) }
+            }
+            let onEvent: @Sendable (NetworkPCMTransport.Event) -> Void = { [weak self] event in
+                Task { @MainActor [weak self] in self?.handleTransportEvent(event) }
+            }
+            let useUDP = UserDefaults.standard.bool(forKey: UDPOpusConfiguration.enabledKey)
+            playbackQueue = PlaybackQueueTracker(maximumFrames: useUDP ? 1600 : 4000)
+            let transport: any CallPCMTransport
+            if useUDP {
+                transport = UDPOpusTransport(handshake: handshakeSequence, onPCM: onPCM, onEvent: onEvent)
+            } else {
+                transport = NetworkPCMTransport(
                 host: NWEndpoint.Host(route.host),
                 port: NWEndpoint.Port(rawValue: route.port)!,
                 handshakeSequence: handshakeSequence,
                 requiresWiFi: route.requiresWiFi,
                 usesTLS: route.usesTLS,
                 certificateSHA256: route.certificateSHA256,
-                onPCM: { [weak self, callRecorder] pcm in
-                    callRecorder.append(pcm, uplink: false)
-                    Task { @MainActor [weak self] in self?.schedulePlayback(pcm) }
-                },
-                onEvent: { [weak self] event in
-                    Task { @MainActor [weak self] in self?.handleTransportEvent(event) }
-                }
-            )
+                onPCM: onPCM,
+                onEvent: onEvent
+                )
+            }
 
             engine.attach(player)
             guard let playbackFormat = AVAudioFormat(
@@ -703,7 +712,7 @@ final class AudioSessionController: ObservableObject {
             let playbackDrops = playbackQueue.droppedFrames > 0
                 ? " · 播放丢弃\(playbackQueue.droppedFrames)帧"
                 : ""
-            diagnosticDescription = "\(DeviceContext.displayName) \(handshakeState) ↑\(statistics.uplinkBytes)B 峰值\(statistics.uplinkPeak) · ↓\(statistics.downlinkBytes)B 峰值\(statistics.downlinkPeak)\(playbackDrops) · 引擎\(engine?.isRunning == true ? "运行" : "停止") 播放\(player?.isPlaying == true ? "运行" : "停止") 恢复\(recoveryCount)次"
+            diagnosticDescription = "\(DeviceContext.displayName) \(handshakeState) ↑\(statistics.uplinkBytes)B 峰值\(statistics.uplinkPeak) · ↓\(statistics.downlinkBytes)B 峰值\(statistics.downlinkPeak)\(playbackDrops) · 引擎\(engine?.isRunning == true ? "运行" : "停止") 播放\(player?.isPlaying == true ? "运行" : "停止") 恢复\(recoveryCount)次\(statistics.detail)"
             refreshRouteDescription()
         case let .status(message):
             // 连接状态单独显示，避免把“尚未握手”误读成模块已经拒绝握手。
@@ -1023,7 +1032,7 @@ private enum SynthesizedCallTone {
 }
 
 /// 维护低延迟 TCP 字节流；每次连接尝试都生成新的认证握手。
-private final class NetworkPCMTransport: @unchecked Sendable {
+final class NetworkPCMTransport: CallPCMTransport, @unchecked Sendable {
     enum Event: Sendable {
         case connected
         case statistics(NetworkPCMStatistics)
@@ -1334,11 +1343,12 @@ private final class NetworkPCMTransport: @unchecked Sendable {
     }
 }
 
-private struct NetworkPCMStatistics: Sendable {
+struct NetworkPCMStatistics: Sendable {
     let uplinkBytes: UInt64
     let uplinkPeak: Int
     let downlinkBytes: UInt64
     let downlinkPeak: Int
+    var detail: String = ""
 }
 
 /// 对麦克风做语音带限与线性降采样，输出模块需要的 8 kHz PCM16LE。

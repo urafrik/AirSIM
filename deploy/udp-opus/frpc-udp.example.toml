@@ -1,0 +1,8 @@
+# Add this proxy to the SAME frpc instance as the existing TCP mappings.
+# For a managed frp dashboard, enter these values in its UDP tunnel form.
+[[proxies]]
+name = "airsim-opus-test"
+type = "udp"
+localIP = "127.0.0.1"
+localPort = 17594
+remotePort = 17594

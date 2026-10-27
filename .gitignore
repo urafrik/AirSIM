@@ -31,3 +31,8 @@ module/module-agent/*.tar.gz
 
 __pycache__/
 *.pyc
+
+# Generated experimental codec and private gateway config
+iOS/Opus/
+**/gateway.local.json
+**/opus.dll

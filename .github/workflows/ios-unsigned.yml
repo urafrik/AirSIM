@@ -96,6 +96,10 @@ jobs:
           swiftc -parse-as-library -swift-version 5 iOS/Shared/PinnedTLS.swift iOS/Shared/DirectConnectionPolicy.swift "$BUILD_DIR/RoutingFixture.swift" iOS/RoutingSmoke/main.swift -o "$BUILD_DIR/routing-smoke"
           "$BUILD_DIR/routing-smoke" | tee "$BUILD_DIR/routing-tests.log"
 
+      - name: Build pinned Opus codec for iPhone
+        shell: bash
+        run: bash iOS/scripts/build_opus.sh
+
       - name: Archive for physical iPhone without signing
         shell: bash
         run: |
