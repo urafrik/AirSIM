@@ -5,7 +5,7 @@ from pathlib import Path
 import struct
 import unittest
 from gateway import Gateway
-from protocol import Cipher, Jitter, Opus, HELLO, UP, DOWN, READY
+from protocol import Cipher, Jitter, Opus, DownlinkBuffer, HELLO, UP, DOWN, READY
 
 LIBRARY = Path(os.environ.get('AIRSIM_OPUS_LIBRARY', Path(__file__).parent / 'opus.dll')).resolve()
 
@@ -74,6 +74,28 @@ class ProtocolTests(unittest.TestCase):
         self.assertGreaterEqual(jitter.rebuffers, 1)
 
 class IntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_downlink_accepts_eight_frame_batch_without_discarding_speech(self):
+        clock = [0.0]
+        buffer = DownlinkBuffer(clock=lambda: clock[0])
+        for index in range(8): buffer.push(index, b'voice')
+        received = []
+        for index in range(8):
+            clock[0] = index*.02
+            received.append((await buffer.get())[0])
+        self.assertEqual(received, list(range(8)))
+        self.assertEqual(buffer.overflow_drops + buffer.stale_drops, 0)
+
+    async def test_downlink_bounds_stale_audio_and_keeps_original_indices(self):
+        clock = [0.0]
+        buffer = DownlinkBuffer(clock=lambda: clock[0])
+        for index in range(20): buffer.push(index, b'old')
+        self.assertEqual(buffer.overflow_drops, 8)
+        self.assertEqual((await buffer.get())[0], 8)
+        clock[0] = .5
+        buffer.push(20, b'new')
+        self.assertEqual(await buffer.get(), (20, b'new'))
+        self.assertEqual(buffer.stale_drops, 11)
+
     async def test_encrypted_udp_to_authenticated_pcm_and_back(self):
         connections = []
         async def android(reader, writer):

@@ -65,3 +65,9 @@ Windows Opus DLL：conda-forge libopus 1.3.1，BSD 授权。iPhone 从 Xiph Opus
 ## 从第 83 版升级
 
 先结束通话并关闭旧电脑网关窗口。将原网关目录中的 gateway.local.json 复制到新版目录（不要公开），沿用原密钥和 UDP 映射；双击新版启动脚本。iPhone 覆盖安装第 84 版，不用重新输入密钥。不要同时运行两个网关。新版会生成 gateway.log，供定位安卓音频桥关闭原因。
+
+## Windows 网关 84.1（兼容 iPhone 84）
+
+针对听到对方偶发断音的情况，调整电脑下行队列：允许短时成批到达，队列容量上限为 12 帧，不预先等待填满；本地排队超过 160ms 的音频仍丢弃。丢弃后保留原始帧序号，让 iPhone 能识别缺口并尝试补偿。日志将下行容量丢弃 down_queue_drops、过期丢弃 down_stale_drops、队列峰值 down_queue_peak、安卓读取间隔峰值 read_gap_ms_peak，与上行时钟重置 up_clock_resets 分开记录。
+
+只需关闭旧网关，把 gateway.local.json 复制到 84.1 目录并启动新版；iPhone、安卓和 frp 设置保持不变。此修订改善一个可能造成断音的队列行为，仍需真机对比，不能保证消除所有公网卡顿。

@@ -2,6 +2,7 @@
 import ctypes as C
 import struct
 import time
+import asyncio
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import hashes
@@ -9,6 +10,32 @@ from cryptography.hazmat.primitives import hashes
 MAGIC = b'AUO1'
 HELLO, UP, DOWN, READY, PING, CLOSE = range(1, 7)
 FRAME_SAMPLES, FRAME_BYTES = 160, 320  # 8 kHz mono, 20 ms
+
+class DownlinkBuffer:
+    """Absorb short Android read batches without introducing a startup wait.
+
+    Capacity is a safety ceiling, not a target fill. Locally queued audio older
+    than 160ms is discarded and its original frame index is preserved as a gap.
+    """
+    def __init__(self, clock=time.monotonic):
+        self.queue = asyncio.Queue(maxsize=12)
+        self.clock = clock
+        self.overflow_drops = self.stale_drops = self.peak = 0
+
+    def push(self, index, pcm):
+        if self.queue.full():
+            self.queue.get_nowait()
+            self.overflow_drops += 1
+        self.queue.put_nowait((index, pcm, self.clock()))
+        self.peak = max(self.peak, self.queue.qsize())
+
+    async def get(self):
+        while True:
+            index, pcm, arrived = await self.queue.get()
+            if self.clock() - arrived > .16:
+                self.stale_drops += 1
+                continue
+            return index, pcm
 
 class Cipher:
     def __init__(self, psk, sid, sending_client):

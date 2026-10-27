@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 import struct
 import time
-from protocol import Cipher, Jitter, Opus, MAGIC, HELLO, UP, DOWN, READY, PING, CLOSE
+from protocol import Cipher, Jitter, Opus, DownlinkBuffer, MAGIC, HELLO, UP, DOWN, READY, PING, CLOSE
 
 log = logging.getLogger('airsim-udp')
 
@@ -22,6 +22,8 @@ class Session:
         self.writer = None
         self.ready = False
         self.tx_index = self.uplink = self.downlink = self.catchups = 0
+        self.capture_buffer = DownlinkBuffer()
+        self.read_gap_ms_peak = 0
         self.task = asyncio.create_task(self.run())
 
     def send(self, payload):
@@ -67,24 +69,29 @@ class Session:
             if self.codec: self.codec.close()
             self.gateway.retired[self.cipher.sid] = time.monotonic()
             if self.gateway.session is self: self.gateway.session = None
-            log.info('session_stats up=%d down=%d missing=%d late=%d catchups=%d rebuffers=%d',
+            log.info('session_stats up=%d down=%d missing=%d late=%d up_clock_resets=%d rebuffers=%d down_queue_drops=%d down_stale_drops=%d down_queue_peak=%d read_gap_ms_peak=%d',
                      self.uplink, self.downlink, self.jitter.lost, self.jitter.late, self.catchups,
-                     self.jitter.rebuffers)
+                     self.jitter.rebuffers, self.capture_buffer.overflow_drops,
+                     self.capture_buffer.stale_drops, self.capture_buffer.peak,
+                     self.read_gap_ms_peak)
 
     async def capture(self):
-        # Continuous Android read; latest 5 frames only, even when UDP stalls.
+        # Android HAL can deliver ~96ms in a batch. Capacity must not mistake
+        # that natural batching for a stalled network; stale audio is still bounded.
         async def read():
+            last_read = time.monotonic()
             while True:
                 pcm = await self.reader.readexactly(320)
-                if self.capture_queue.full(): self.capture_queue.get_nowait(); self.catchups += 1
-                self.capture_queue.put_nowait(pcm)
-        self.capture_queue = asyncio.Queue(maxsize=5)
+                now = time.monotonic()
+                self.read_gap_ms_peak = max(self.read_gap_ms_peak, round((now-last_read)*1000))
+                last_read = now
+                self.capture_buffer.push(self.tx_index, pcm)
+                self.tx_index += 1
         async def send():
             deadline = time.monotonic()
             while True:
-                pcm = await self.capture_queue.get()
-                self.send(bytes([DOWN]) + struct.pack('>I', self.tx_index) + self.codec.encode(pcm))
-                self.tx_index += 1
+                index, pcm = await self.capture_buffer.get()
+                self.send(bytes([DOWN]) + struct.pack('>I', index) + self.codec.encode(pcm))
                 self.downlink += 1
                 deadline += .02
                 if deadline < time.monotonic() - .04: deadline = time.monotonic()
@@ -117,9 +124,11 @@ class Session:
             await asyncio.sleep(1)
             if time.monotonic() - self.last_seen > 8: raise TimeoutError('UDP idle')
             if int(time.monotonic()) % 5 == 0:
-                log.info('media up=%d down=%d missing=%d late=%d catchups=%d rebuffers=%d buffer_ms=%d',
+                log.info('media up=%d down=%d missing=%d late=%d up_clock_resets=%d rebuffers=%d buffer_ms=%d down_queue_drops=%d down_stale_drops=%d down_queue_peak=%d read_gap_ms_peak=%d',
                          self.uplink, self.downlink, self.jitter.lost, self.jitter.late, self.catchups,
-                         self.jitter.rebuffers, round(self.jitter.delay*1000))
+                         self.jitter.rebuffers, round(self.jitter.delay*1000),
+                         self.capture_buffer.overflow_drops, self.capture_buffer.stale_drops,
+                         self.capture_buffer.peak, self.read_gap_ms_peak)
 
 class Gateway(asyncio.DatagramProtocol):
     def __init__(self, config):
