@@ -228,6 +228,7 @@ final class AudioSessionController: ObservableObject {
     @Published private(set) var active = false
     @Published private(set) var routeDescription = ""
     @Published private(set) var transportReady = false
+    @Published private(set) var mediaTransportName = "PCM"
     @Published private(set) var diagnosticDescription = ""
     @Published private(set) var moduleDiagnosticDescription = ""
     @Published private(set) var speakerEnabled = false
@@ -369,6 +370,7 @@ final class AudioSessionController: ObservableObject {
                 Task { @MainActor [weak self] in self?.handleTransportEvent(event) }
             }
             let useUDP = UserDefaults.standard.bool(forKey: UDPOpusConfiguration.enabledKey)
+            mediaTransportName = useUDP ? "UDP/Opus" : "TCP/PCM"
             playbackQueue = PlaybackQueueTracker(maximumFrames: useUDP ? 1600 : 4000)
             let transport: any CallPCMTransport
             if useUDP {
@@ -720,7 +722,7 @@ final class AudioSessionController: ObservableObject {
         case let .failed(message):
             transportReady = false
             routeDescription = "网络语音未连接"
-            diagnosticDescription = "\(DeviceContext.displayName) PCM 连接失败：\(message)"
+            diagnosticDescription += "\n\(DeviceContext.displayName) PCM 连接失败：\(message)"
             errorMessage = message
         case .closed:
             transportReady = false

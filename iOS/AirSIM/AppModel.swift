@@ -497,7 +497,7 @@ final class AppModel: ObservableObject {
     var callAudioStatusText: String {
         switch cloudCallAudioState {
         case .idle:
-            return audio.transportReady ? "语音链路已连接" : (audio.errorMessage == nil ? "正在建立语音链路" : "语音链路已中断")
+            return audio.transportReady ? "\(audio.mediaTransportName) 已连接" : (audio.errorMessage == nil ? "正在建立语音链路" : "语音链路已中断")
         case let .connecting(attempt, maximum):
             return "正在重试云端语音 \(attempt)/\(maximum)"
         case .connected:

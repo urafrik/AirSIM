@@ -1843,7 +1843,7 @@ struct ActiveCallView: View {
         case .failed: return .red
         case .connected: return .green
         case .connecting: return .orange
-        case .idle: return model.audio.active ? .green : .orange
+        case .idle: return model.audio.errorMessage != nil ? .red : (model.audio.transportReady ? .green : .orange)
         }
     }
 
