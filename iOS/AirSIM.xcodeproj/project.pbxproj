@@ -55,6 +55,7 @@
 		A10000000000000000000035 /* DirectConnectionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000034 /* DirectConnectionPolicy.swift */; };
 		A10000000000000000000036 /* UDPOpusTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000036 /* UDPOpusTransport.swift */; };
 		A10000000000000000000037 /* OpusBridge.c in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000037 /* OpusBridge.c */; };
+		A10000000000000000000038 /* UDPOpusJitterBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000038 /* UDPOpusJitterBuffer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -154,6 +155,7 @@
 		B10000000000000000000034 /* DirectConnectionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectConnectionPolicy.swift; sourceTree = "<group>"; };
 		B10000000000000000000036 /* UDPOpusTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UDPOpusTransport.swift; sourceTree = "<group>"; };
 		B10000000000000000000037 /* OpusBridge.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = OpusBridge.c; sourceTree = "<group>"; };
+		B10000000000000000000038 /* UDPOpusJitterBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../Shared/UDPOpusJitterBuffer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -214,6 +216,7 @@
 				B10000000000000000000006 /* AudioSessionController.swift */,
 				B10000000000000000000037 /* OpusBridge.c */,
 				B10000000000000000000036 /* UDPOpusTransport.swift */,
+				B10000000000000000000038 /* UDPOpusJitterBuffer.swift */,
 				B10000000000000000000007 /* AppModel.swift */,
 				B10000000000000000000010 /* CallKitController.swift */,
 				B1000000000000000000001B /* VoIPPushController.swift */,
@@ -458,6 +461,7 @@
 				A10000000000000000000006 /* AudioSessionController.swift in Sources */,
 				A10000000000000000000037 /* OpusBridge.c in Sources */,
 				A10000000000000000000036 /* UDPOpusTransport.swift in Sources */,
+				A10000000000000000000038 /* UDPOpusJitterBuffer.swift in Sources */,
 				A10000000000000000000007 /* AppModel.swift in Sources */,
 				A10000000000000000000008 /* RootView.swift in Sources */,
 				A10000000000000000000009 /* PhoneViews.swift in Sources */,
@@ -570,7 +574,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "$(AIRSIM_PUSH_ENTITLEMENTS)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 83;
+				CURRENT_PROJECT_VERSION = 84;
 				DEVELOPMENT_TEAM = "";
 				AIRSIM_APNS_ENVIRONMENT = sandbox;
 				AIRSIM_PUSH_ENTITLEMENTS = "AirSIM/AirSIM.entitlements";
@@ -599,7 +603,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "$(AIRSIM_PUSH_ENTITLEMENTS)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 83;
+				CURRENT_PROJECT_VERSION = 84;
 				DEVELOPMENT_TEAM = "";
 				AIRSIM_APNS_ENVIRONMENT = production;
 				AIRSIM_PUSH_ENTITLEMENTS = "AirSIM/AirSIM.entitlements";
@@ -626,7 +630,7 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 83;
+				CURRENT_PROJECT_VERSION = 84;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = AirSIMLiveActivityExtension/Info.plist;
@@ -652,7 +656,7 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 83;
+				CURRENT_PROJECT_VERSION = 84;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = AirSIMLiveActivityExtension/Info.plist;
@@ -712,7 +716,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "AirSIMWatchApp/AirSIMWatchApp.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 83;
+				CURRENT_PROJECT_VERSION = 84;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -741,7 +745,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "AirSIMWatchApp/AirSIMWatchApp.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 83;
+				CURRENT_PROJECT_VERSION = 84;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "AirSIMWatchApp/Info.plist";

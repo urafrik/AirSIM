@@ -96,6 +96,13 @@ jobs:
           swiftc -parse-as-library -swift-version 5 iOS/Shared/PinnedTLS.swift iOS/Shared/DirectConnectionPolicy.swift "$BUILD_DIR/RoutingFixture.swift" iOS/RoutingSmoke/main.swift -o "$BUILD_DIR/routing-smoke"
           "$BUILD_DIR/routing-smoke" | tee "$BUILD_DIR/routing-tests.log"
 
+      - name: Verify UDP jitter recovery with actual Swift policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          swiftc -swift-version 5 iOS/Shared/UDPOpusJitterBuffer.swift iOS/UDPOpusSmoke/main.swift -o "$BUILD_DIR/udp-jitter-smoke"
+          "$BUILD_DIR/udp-jitter-smoke" | tee "$BUILD_DIR/udp-jitter-tests.log"
+
       - name: Build pinned Opus codec for iPhone
         shell: bash
         run: bash iOS/scripts/build_opus.sh

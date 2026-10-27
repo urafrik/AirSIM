@@ -4,6 +4,7 @@ import asyncio
 import ipaddress
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
 import struct
@@ -56,14 +57,19 @@ class Session:
         except asyncio.CancelledError:
             pass
         except Exception as error:
-            log.warning('session_closed reason=%s', type(error).__name__)
+            log.exception('session_closed reason=%s', type(error).__name__)
+            try:
+                self.send(b'\x07Android PCM session closed; see gateway.log')
+            except Exception:
+                pass
         finally:
             if self.writer: self.writer.close()
             if self.codec: self.codec.close()
             self.gateway.retired[self.cipher.sid] = time.monotonic()
             if self.gateway.session is self: self.gateway.session = None
-            log.info('session_stats up=%d down=%d missing=%d late=%d catchups=%d',
-                     self.uplink, self.downlink, self.jitter.lost, self.jitter.late, self.catchups)
+            log.info('session_stats up=%d down=%d missing=%d late=%d catchups=%d rebuffers=%d',
+                     self.uplink, self.downlink, self.jitter.lost, self.jitter.late, self.catchups,
+                     self.jitter.rebuffers)
 
     async def capture(self):
         # Continuous Android read; latest 5 frames only, even when UDP stalls.
@@ -102,9 +108,7 @@ class Session:
             if deadline < time.monotonic() - .04:
                 # Do not burst old audio into Android after an event loop stall.
                 deadline = time.monotonic()
-                self.jitter.frames.clear()
-                self.jitter.start = None
-                self.jitter.next = None
+                self.jitter.rebuffer()
                 self.catchups += 1
             await asyncio.sleep(max(0, deadline - time.monotonic()))
 
@@ -113,8 +117,9 @@ class Session:
             await asyncio.sleep(1)
             if time.monotonic() - self.last_seen > 8: raise TimeoutError('UDP idle')
             if int(time.monotonic()) % 5 == 0:
-                log.info('media up=%d down=%d missing=%d late=%d catchups=%d',
-                         self.uplink, self.downlink, self.jitter.lost, self.jitter.late, self.catchups)
+                log.info('media up=%d down=%d missing=%d late=%d catchups=%d rebuffers=%d buffer_ms=%d',
+                         self.uplink, self.downlink, self.jitter.lost, self.jitter.late, self.catchups,
+                         self.jitter.rebuffers, round(self.jitter.delay*1000))
 
 class Gateway(asyncio.DatagramProtocol):
     def __init__(self, config):
@@ -176,7 +181,10 @@ if __name__ == '__main__':
         with path.open('x', encoding='utf-8') as file: json.dump(config, file, indent=2)
         print('Created private configuration. Enter key_hex into iPhone; do not share this file.')
     else:
-        logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
+        file_handler = RotatingFileHandler(path.resolve().parent / 'gateway.log',
+                                          maxBytes=2_000_000, backupCount=2, encoding='utf-8')
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s',
+                            handlers=[logging.StreamHandler(), file_handler])
         config = json.loads(path.read_text(encoding='utf-8'))
         library = Path(config['opus_library'])
         if not library.is_absolute(): library = path.resolve().parent / library

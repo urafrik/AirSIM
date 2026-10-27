@@ -47,12 +47,28 @@ class Jitter:
         self.frames, self.next, self.start = {}, None, None
         self.delay = .06
         self.lost = self.late = self.dropped = 0
+        self.misses = self.late_streak = self.rebuffers = 0
+        self.highest = -1
+
+    def rebuffer(self):
+        self.frames.clear()
+        self.next = self.start = None
+        self.misses = self.late_streak = 0
+        self.delay = min(.12, self.delay + .02)
+        self.rebuffers += 1
 
     def push(self, index, data, now=None):
         now = time.monotonic() if now is None else now
+        # Ignore old reordered copies when waiting for a new timeline anchor.
+        if self.next is None and index <= self.highest: return
+        advancing = index > self.highest
+        self.highest = max(self.highest, index)
         if self.next is not None and index < self.next:
             self.late += 1
-            return
+            if advancing: self.late_streak += 1
+            if self.late_streak < 3: return
+            self.rebuffer()
+        self.late_streak = 0
         if self.start is None:
             self.next, self.start = index, now + self.delay
         if index > self.next + 50:  # catch up after a long stall; never replay old speech
@@ -70,7 +86,13 @@ class Jitter:
         frame = self.frames.pop(index, None)
         if frame is None:
             self.lost += 1
-        return frame, self.frames.get(index + 1)
+            self.misses += 1
+        else:
+            self.misses = 0
+        following = self.frames.get(index + 1)
+        if self.misses >= 3 and not self.frames:
+            self.rebuffer()
+        return frame, following
 
 class Opus:
     def __init__(self, path):

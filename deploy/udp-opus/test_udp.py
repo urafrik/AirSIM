@@ -50,6 +50,29 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(len(codec.decode(packets[-1], fec=True)), 320)
         finally: codec.close()
 
+    def test_sustained_late_stream_reanchors_instead_of_permanent_plc(self):
+        jitter = Jitter()
+        jitter.push(0, b'a', now=0)
+        for tick in range(20): jitter.pop(now=.061 + tick*.02)
+        # First preview kept advancing forever here, rejecting every arriving frame.
+        decoded = 0
+        for index in range(1, 101):
+            now = .50 + index*.02
+            jitter.push(index, b'voice', now=now)
+            item = jitter.pop(now=now)
+            if item and item[0] is not None: decoded += 1
+        self.assertGreater(decoded, 80)
+        self.assertLessEqual(jitter.delay, .12)
+        self.assertLess(jitter.rebuffers, 5)
+
+    def test_late_but_ordered_sender_recovers_when_playout_ahead(self):
+        jitter = Jitter()
+        jitter.push(0, b'first', now=0)
+        jitter.next, jitter.start = 100, 0  # Model the actual ahead-of-stream state.
+        for index in range(1, 4): jitter.push(index, b'voice', now=.1 + index*.02)
+        self.assertEqual(jitter.next, 3)
+        self.assertGreaterEqual(jitter.rebuffers, 1)
+
 class IntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_encrypted_udp_to_authenticated_pcm_and_back(self):
         connections = []

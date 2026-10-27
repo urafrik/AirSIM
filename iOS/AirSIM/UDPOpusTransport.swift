@@ -63,6 +63,7 @@ final class UDPOpusTransport: CallPCMTransport, @unchecked Sendable {
     private var seen = Set<UInt64>()
     private var ready = false
     private var stopped = false
+    private var closing = false
     private var startedAt: TimeInterval = 0
     private var lastReceived: TimeInterval = 0
     private var lastHello: TimeInterval = 0
@@ -70,9 +71,7 @@ final class UDPOpusTransport: CallPCMTransport, @unchecked Sendable {
     private var hello = Data()
     private var sending = 0
     private var txIndex: UInt32 = 0
-    private var nextIndex: UInt32?
-    private var playAt: TimeInterval = 0
-    private var frames: [UInt32: Data] = [:]
+    private var jitter = UDPOpusJitterBuffer()
     private let captureLock = NSLock()
     private var captured = Data()
     private var upBytes: UInt64 = 0
@@ -80,10 +79,8 @@ final class UDPOpusTransport: CallPCMTransport, @unchecked Sendable {
     private var upPeak = 0
     private var downPeak = 0
     private var concealed = 0
-    private var late = 0
     private var captureDrops = 0
     private var lastTick: TimeInterval = 0
-    private var jitterDelay: TimeInterval = 0.06
 
     init(handshake: PCMHandshakeSequence, onPCM: @escaping @Sendable (Data) -> Void,
          onEvent: @escaping @Sendable (NetworkPCMTransport.Event) -> Void) {
@@ -110,7 +107,7 @@ final class UDPOpusTransport: CallPCMTransport, @unchecked Sendable {
             startedAt = ProcessInfo.processInfo.systemUptime
             lastReceived = startedAt
             conn.stateUpdateHandler = { [weak self] state in
-                guard let self, !self.stopped else { return }
+                guard let self, !self.stopped, !self.closing else { return }
                 if case .ready = state { self.receive(); self.send(self.hello); self.lastHello = ProcessInfo.processInfo.systemUptime }
                 if case let .failed(error) = state { self.fail(error.localizedDescription) }
             }
@@ -125,8 +122,13 @@ final class UDPOpusTransport: CallPCMTransport, @unchecked Sendable {
     } }
 
     func stop() { queue.async { [self] in
-        if ready { send(Data([6])) }
-        cleanup()
+        if closing || stopped { return }
+        if ready {
+            for _ in 0..<3 { send(Data([6])) }
+            ready = false; closing = true
+            timer?.cancel(); timer = nil
+            queue.asyncAfter(deadline: .now() + .milliseconds(150)) { [self] in cleanup() }
+        } else { cleanup() }
     } }
 
     private func cleanup() {
@@ -135,7 +137,7 @@ final class UDPOpusTransport: CallPCMTransport, @unchecked Sendable {
         connection?.cancel(); connection = nil
         if let codec { airsim_opus_destroy(codec) }; codec = nil
         captureLock.lock(); captured.removeAll(); captureLock.unlock()
-        frames.removeAll()
+        jitter = UDPOpusJitterBuffer()
     }
     private func fail(_ message: String) {
         guard !stopped else { return }
@@ -154,7 +156,7 @@ final class UDPOpusTransport: CallPCMTransport, @unchecked Sendable {
     }
 
     private func send(_ payload: Data) {
-        guard !stopped, let txKey, sequence < UInt64.max, sending < 4 else { return }
+        guard !stopped, let txKey, sequence < UInt64.max, (sending < 4 || payload.first == 6) else { return }
         do {
             let count = sequence; sequence += 1
             let header = Data("AUO1".utf8) + sid + Self.integer(count)
@@ -170,7 +172,7 @@ final class UDPOpusTransport: CallPCMTransport, @unchecked Sendable {
 
     private func receive() {
         connection?.receiveMessage { [weak self] data, _, _, error in
-            guard let self, !self.stopped else { return }
+            guard let self, !self.stopped, !self.closing else { return }
             if let data { self.consume(data) }
             if let error { self.fail(error.localizedDescription) } else { self.receive() }
         }
@@ -189,14 +191,14 @@ final class UDPOpusTransport: CallPCMTransport, @unchecked Sendable {
             seen = Set(seen.filter { highest! - $0 < 64 })
             lastReceived = ProcessInfo.processInfo.systemUptime
             guard let kind = payload.first else { return }
+            if kind == 7 {
+                fail("安卓音频会话已关闭，请查看电脑 gateway.log")
+                return
+            }
             if kind == 4 && !ready { ready = true; onEvent(.connected) }
             if kind == 3 && ready && payload.count > 5 && payload.count <= 405 {
                 let index = payload[1..<5].reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
-                if let nextIndex, index < nextIndex { late += 1; return }
-                if nextIndex == nil || UInt64(index) > UInt64(nextIndex!) + 50 {
-                    frames.removeAll(); nextIndex = index; playAt = lastReceived + jitterDelay
-                }
-                if UInt64(index) <= UInt64(nextIndex!) + 15 { frames[index] = Data(payload.dropFirst(5)) }
+                jitter.push(index, data: Data(payload.dropFirst(5)), now: lastReceived)
             }
         } catch { return }
     }
@@ -211,7 +213,7 @@ final class UDPOpusTransport: CallPCMTransport, @unchecked Sendable {
             return
         }
         if lastTick > 0 && now - lastTick > 0.10 {
-            frames.removeAll(); nextIndex = nil
+            jitter.rebuffer()
             captureLock.lock(); captured.removeAll(); captureLock.unlock()
         }
         lastTick = now
@@ -230,9 +232,9 @@ final class UDPOpusTransport: CallPCMTransport, @unchecked Sendable {
                 txIndex &+= 1; upBytes += 320; upPeak = max(upPeak, Self.peak(pcm))
             } else { fail("Opus 编码失败"); return }
         }
-        if let index = nextIndex, now >= playAt {
-            let packet = frames.removeValue(forKey: index)
-            let following = frames[index &+ 1]
+        if let item = jitter.pop(now: now) {
+            let packet = item.packet
+            let following = item.following
             let compressed = packet ?? following
             var samples = [Int16](repeating: 0, count: 160)
             let count: Int32
@@ -246,13 +248,12 @@ final class UDPOpusTransport: CallPCMTransport, @unchecked Sendable {
                 let decoded = samples.withUnsafeBytes { Data($0) }
                 downBytes += 320; downPeak = max(downPeak, Self.peak(decoded)); onPCM(decoded)
             }
-            nextIndex = index &+ 1
         }
         if now - lastStats >= 1 {
             lastStats = now
             onEvent(.statistics(NetworkPCMStatistics(uplinkBytes: upBytes, uplinkPeak: upPeak,
                 downlinkBytes: downBytes, downlinkPeak: downPeak,
-                detail: " · UDP/Opus · 补偿\(concealed)帧 迟到\(late)帧 上行丢旧\(dropped)帧")))
+                detail: " · UDP/Opus · 补偿\(concealed)帧 迟到\(jitter.late)帧 重对齐\(jitter.rebuffers)次 缓冲\(Int(jitter.delay * 1000))ms 上行丢旧\(dropped)帧")))
             send(Data([5]))
         }
     }
