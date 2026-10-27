@@ -498,7 +498,10 @@ struct AirSIMLiveActivityWidget: Widget {
         var parts: [String] = []
         if let mode = state.networkMode, !mode.isEmpty { parts.append(mode) }
         if let band = state.radioBand, !band.isEmpty { parts.append(band) }
-        return parts.isEmpty ? "正在读取蜂窝网络" : parts.joined(separator: " · ")
+        if let status = state.radioStatusText {
+            return parts.isEmpty ? status : parts.joined(separator: " · ") + " · " + status
+        }
+        return parts.isEmpty ? "暂未取得蜂窝状态" : parts.joined(separator: " · ")
     }
 
     private func standbyCarrierName(

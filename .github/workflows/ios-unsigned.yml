@@ -96,6 +96,21 @@ jobs:
           swiftc -parse-as-library -swift-version 5 iOS/Shared/PinnedTLS.swift iOS/Shared/DirectConnectionPolicy.swift "$BUILD_DIR/RoutingFixture.swift" iOS/RoutingSmoke/main.swift -o "$BUILD_DIR/routing-smoke"
           "$BUILD_DIR/routing-smoke" | tee "$BUILD_DIR/routing-tests.log"
 
+      - name: Verify signal freshness and activity compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          state = Path('iOS/Shared/AirSIMLiveActivityShared.swift').read_text().split('enum LiveActivityVisualPolicy', 1)[0]
+          state = state.replace('import ActivityKit', '').replace('import AppIntents', '').replace(': ActivityAttributes {', '{')
+          models = Path('iOS/AirSIM/APIModels.swift').read_text().split('struct ModemStatus:', 1)[1].split('struct NetworkTrafficSnapshot:', 1)[0]
+          Path(os.environ['BUILD_DIR'], 'RadioFixture.swift').write_text(state + '\nstruct ModemStatus:' + models)
+          PY
+          swiftc -swift-version 5 "$BUILD_DIR/RadioFixture.swift" iOS/RadioActivitySmoke/main.swift -o "$BUILD_DIR/radio-smoke"
+          "$BUILD_DIR/radio-smoke" | tee "$BUILD_DIR/radio-tests.log"
+
       - name: Verify UDP jitter recovery with actual Swift policy
         shell: bash
         run: |

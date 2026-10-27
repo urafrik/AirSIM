@@ -269,6 +269,7 @@ final class AppModel: ObservableObject {
 
     private var pollingTask: Task<Void, Never>?
     private var moduleMetadataTask: Task<Void, Never>?
+    private var radioRefreshLoopTask: Task<Void, Never>?
     private var activeOperationCount = 0
     private var startingCallAudio = false
     private var currentCallTransport: CallTransport?
@@ -722,6 +723,18 @@ final class AppModel: ObservableObject {
         pollingGeneration &+= 1
         let generation = pollingGeneration
         pollingTask?.cancel()
+        moduleMetadataTask?.cancel()
+        radioRefreshLoopTask?.cancel()
+        nextModuleMetadataRefresh = .distantPast
+        radioRefreshLoopTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, self.pollingGeneration == generation else { return }
+                if let service = self.verifiedVoWLANAPI() {
+                    self.scheduleModuleMetadataRefresh(generation: generation, api: service)
+                }
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+            }
+        }
         pollingTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.poll(generation: generation)
@@ -750,6 +763,8 @@ final class AppModel: ObservableObject {
         pollingGeneration &+= 1
         pollingTask?.cancel()
         pollingTask = nil
+        radioRefreshLoopTask?.cancel()
+        radioRefreshLoopTask = nil
         moduleMetadataTask?.cancel()
         moduleMetadataTask = nil
         audio.deactivate()
@@ -1151,7 +1166,7 @@ final class AppModel: ObservableObject {
     /// 蜂窝状态和版本不必跟随每秒通话轮询；独立刷新避免慢 AT 状态接口拖住来电检测。
     private func scheduleModuleMetadataRefresh(generation: Int, api: AirSIMAPI) {
         guard moduleMetadataTask == nil, Date() >= nextModuleMetadataRefresh else { return }
-        nextModuleMetadataRefresh = Date().addingTimeInterval(10)
+        nextModuleMetadataRefresh = Date().addingTimeInterval(appIsActive ? 5 : 15)
         moduleMetadataTask = Task { [weak self] in
             await self?.refreshModuleMetadata(generation: generation, api: api)
         }
@@ -1160,10 +1175,18 @@ final class AppModel: ObservableObject {
     private func refreshModuleMetadata(generation: Int, api: AirSIMAPI) async {
         defer { moduleMetadataTask = nil }
         async let radioRequest = try? api.modemStatus()
-        let radio = await radioRequest
-        guard !Task.isCancelled, generation == pollingGeneration, isOnline else { return }
-        // A failed sample must not keep displaying an old signal indefinitely.
-        if modemStatus != radio { modemStatus = radio }
+        var radio = await radioRequest
+        if radio != nil { radio?.sampledAt = Date() }
+        guard !Task.isCancelled, generation == pollingGeneration,
+              verifiedVoWLANAPI()?.route == api.route else { return }
+        if radio != nil, !isOnline { isOnline = true }
+        guard isOnline else { return }
+        // A transient request failure must not erase a recent valid sample.
+        // Retention is bounded; the widget separately labels cached/stale information.
+        if let radio { modemStatus = radio }
+        else if modemStatus?.sampledAt.map({ Date().timeIntervalSince($0) > 90 }) ?? true {
+            modemStatus = nil
+        }
         updateLocalConnectionSummary(cellularState: radio?.cellularState ?? modemStatus?.cellularState)
         let lifecycleCall = lifecycleRecord(from: activeCall ?? remoteCall)
         await awaitCloudStatusForLiveActivity(call: lifecycleCall)

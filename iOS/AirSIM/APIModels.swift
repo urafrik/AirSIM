@@ -259,6 +259,7 @@ struct SIMIdentity: Codable, Sendable {
 // MARK: - 模块、网络与定位
 
 struct ModemStatus: Codable, Equatable, Sendable {
+    var sampledAt: Date? = nil
     let imei: String?
     let firmware: String?
     let iccid: String?

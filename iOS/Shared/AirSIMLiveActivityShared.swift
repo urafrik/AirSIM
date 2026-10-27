@@ -38,6 +38,8 @@ struct AirSIMCallActivityAttributes: ActivityAttributes {
         let operatorName: String?
         let networkMode: String?
         let radioBand: String?
+        let radioUpdatedAt: Date?
+        let radioStatusText: String?
         let downloadBytesPerSecond: Double?
         let uploadBytesPerSecond: Double?
         /// 当前用于拨号和媒体路由的 Android Agent。字段保持可选，以兼容旧版 Relay
@@ -60,6 +62,8 @@ struct AirSIMCallActivityAttributes: ActivityAttributes {
             operatorName: String? = nil,
             networkMode: String? = nil,
             radioBand: String? = nil,
+            radioUpdatedAt: Date? = nil,
+            radioStatusText: String? = nil,
             downloadBytesPerSecond: Double? = nil,
             uploadBytesPerSecond: Double? = nil,
             agentDeviceName: String? = nil,
@@ -79,6 +83,8 @@ struct AirSIMCallActivityAttributes: ActivityAttributes {
             self.operatorName = operatorName
             self.networkMode = networkMode
             self.radioBand = radioBand
+            self.radioUpdatedAt = radioUpdatedAt
+            self.radioStatusText = radioStatusText
             self.downloadBytesPerSecond = downloadBytesPerSecond
             self.uploadBytesPerSecond = uploadBytesPerSecond
             self.agentDeviceName = agentDeviceName
@@ -121,6 +127,8 @@ extension AirSIMCallActivityAttributes.ContentState {
         // Keep connection/call facts, but do not present an old measurement as current signal.
         return .init(callID: callID, number: number, displayName: displayName,
                      phase: phase, startedAt: startedAt, transport: transport,
+                     operatorName: operatorName, networkMode: networkMode, radioBand: radioBand,
+                     radioUpdatedAt: radioUpdatedAt, radioStatusText: "后台更新已暂停",
                      downloadBytesPerSecond: downloadBytesPerSecond,
                      uploadBytesPerSecond: uploadBytesPerSecond,
                      agentDeviceName: agentDeviceName, agentPhoneNumber: agentPhoneNumber,

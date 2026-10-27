@@ -268,6 +268,7 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
     private var responseData = Data()
     private var uploadHandle: FileHandle?
     private var keepAlive: WiredHTTPRequestOperation?
+    private var waitingReason = ""
     private var requestStarted = false
     private var finished = false
 
@@ -303,6 +304,18 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
         connection = NWConnection(host: host, port: port, using: parameters)
     }
 
+    private var pathFailure: WiredHTTPError {
+        let detail = waitingReason.isEmpty ? "" : "；\(waitingReason)"
+        switch route {
+        case .any:
+            return .networkPathUnavailable("无法建立远程连接 \(host):\(port)\(detail)")
+        case .type(.wifi):
+            return .networkPathUnavailable("Wi-Fi 路径不可用\(detail)")
+        default:
+            return .wiredPathUnavailable
+        }
+    }
+
     func start() {
         // NWConnection 的回调使用弱引用；请求结束前由操作自持有，避免局部变量离开作用域后提前释放。
         keepAlive = self
@@ -319,7 +332,7 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
             case .ready:
                 guard !self.requestStarted else { return }
                 guard self.route.matches(self.connection.currentPath) else {
-                    self.finish(.failure(WiredHTTPError.wiredPathUnavailable))
+                    self.finish(.failure(self.pathFailure))
                     return
                 }
                 self.requestStarted = true
@@ -327,8 +340,9 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
                 self.sendRequest()
             case let .failed(error):
                 self.finish(.failure(WiredHTTPError.connectionFailed(error.localizedDescription)))
-#if DEBUG
             case let .waiting(error):
+                self.waitingReason = error.localizedDescription
+#if DEBUG
                 print("[AirSIM Network] route=\(self.route.description) waiting=\(error.localizedDescription)")
 #endif
             case .cancelled:
@@ -342,7 +356,7 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
         // 严格路径不匹配时连接可能一直 waiting；请求尚未发送，可安全交给上层决定是否回退。
         queue.asyncAfter(deadline: .now() + (request.url?.scheme == "https" ? 10 : 1.5)) { [weak self] in
             guard let self, !self.finished, !self.requestStarted else { return }
-            self.finish(.failure(WiredHTTPError.wiredPathUnavailable))
+            self.finish(.failure(self.pathFailure))
         }
 
         let timeout = max(1, request.timeoutInterval)
@@ -615,6 +629,7 @@ enum WiredHTTPResponseParser {
 private enum WiredHTTPError: LocalizedError {
     case invalidRequest
     case wiredPathUnavailable
+    case networkPathUnavailable(String)
     case connectionFailed(String)
     case connectionClosed
     case sendFailed(String)
@@ -629,7 +644,7 @@ private enum WiredHTTPError: LocalizedError {
         switch self {
         case .wiredPathUnavailable, .connectionFailed, .connectionClosed, .timedOut:
             return true
-        case .invalidRequest, .sendFailed, .receiveFailed, .responseTooLarge,
+        case .networkPathUnavailable, .invalidRequest, .sendFailed, .receiveFailed, .responseTooLarge,
              .invalidResponse, .incompleteResponse, .unreadableUpload:
             return false
         }
@@ -639,6 +654,7 @@ private enum WiredHTTPError: LocalizedError {
         switch self {
         case .invalidRequest: return "模块请求格式无效"
         case .wiredPathUnavailable: return "未找到模块 USB 以太网路径"
+        case let .networkPathUnavailable(message): return "设备网络连接未建立：\(message)"
         case let .connectionFailed(message): return "模块有线连接失败：\(message)"
         case .connectionClosed: return "模块有线连接已关闭"
         case let .sendFailed(message): return "模块请求发送失败：\(message)"
