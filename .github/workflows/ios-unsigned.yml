@@ -122,6 +122,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          cp iOS/Opus/LICENSE.txt "$BUILD_DIR/AirSIM.xcarchive/Products/Applications/AirSIM.app/Opus-LICENSE.txt"
           python3 iOS/scripts/package_unsigned.py \
             "$BUILD_DIR/AirSIM.xcarchive/Products/Applications/AirSIM.app" \
             "$BUILD_DIR/artifacts" --iphone-only

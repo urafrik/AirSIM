@@ -73,21 +73,19 @@ class Session:
                 if self.capture_queue.full(): self.capture_queue.get_nowait(); self.catchups += 1
                 self.capture_queue.put_nowait(pcm)
         self.capture_queue = asyncio.Queue(maxsize=5)
-        task = asyncio.create_task(read())
-        try:
+        async def send():
             deadline = time.monotonic()
             while True:
                 pcm = await self.capture_queue.get()
-                if task.done(): await task
                 self.send(bytes([DOWN]) + struct.pack('>I', self.tx_index) + self.codec.encode(pcm))
                 self.tx_index += 1
                 self.downlink += 1
                 deadline += .02
                 if deadline < time.monotonic() - .04: deadline = time.monotonic()
                 await asyncio.sleep(max(0, deadline - time.monotonic()))
-        finally:
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+        async with asyncio.TaskGroup() as group:
+            group.create_task(read())
+            group.create_task(send())
 
     async def play(self):
         deadline = time.monotonic()
@@ -114,6 +112,9 @@ class Session:
         while True:
             await asyncio.sleep(1)
             if time.monotonic() - self.last_seen > 8: raise TimeoutError('UDP idle')
+            if int(time.monotonic()) % 5 == 0:
+                log.info('media up=%d down=%d missing=%d late=%d catchups=%d',
+                         self.uplink, self.downlink, self.jitter.lost, self.jitter.late, self.catchups)
 
 class Gateway(asyncio.DatagramProtocol):
     def __init__(self, config):
@@ -170,10 +171,14 @@ if __name__ == '__main__':
     if args.init:
         config = {'android_host': args.android, 'android_port':7593,
                   'listen_host':'127.0.0.1', 'listen_port':17594,
-                  'opus_library':str(Path(__file__).resolve().parent / 'opus.dll'),
+                  'opus_library':'opus.dll',
                   'key_hex':os.urandom(32).hex()}
         with path.open('x', encoding='utf-8') as file: json.dump(config, file, indent=2)
         print('Created private configuration. Enter key_hex into iPhone; do not share this file.')
     else:
         logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
-        asyncio.run(serve(json.loads(path.read_text(encoding='utf-8'))))
+        config = json.loads(path.read_text(encoding='utf-8'))
+        library = Path(config['opus_library'])
+        if not library.is_absolute(): library = path.resolve().parent / library
+        config['opus_library'] = str(library.resolve())
+        asyncio.run(serve(config))

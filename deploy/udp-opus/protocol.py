@@ -42,7 +42,7 @@ class Cipher:
         return payload
 
 class Jitter:
-    """Bounded 60-120ms reorder buffer. Missing frames use Opus PLC/FEC."""
+    """Bounded reorder buffer with a 60ms startup delay. Missing frames use Opus PLC/FEC."""
     def __init__(self):
         self.frames, self.next, self.start = {}, None, None
         self.delay = .06
