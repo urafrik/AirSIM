@@ -535,7 +535,7 @@ struct RecentsView: View {
     let onMessage: (String) -> Void
     @State private var missedOnly = false
     private var filteredCalls: [CallRecord] {
-        missedOnly ? model.callHistory.filter { $0.direction == "incoming" && $0.isUnanswered } : model.callHistory
+        missedOnly ? model.callHistory.filter { $0.isMissedIncoming } : model.callHistory
     }
     @State private var selectedCall: CallRecord?
     @State private var suppressNextCallTap = false
@@ -980,7 +980,7 @@ private struct MessageThreadView: View {
                 } label: {
                     Image(systemName: "arrow.up.circle.fill").font(.title2)
                 }
-                .disabled(reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(model.sendingSMS || reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             .padding()
         }

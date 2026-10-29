@@ -105,6 +105,7 @@ final class StandaloneAgentGateway {
                 case "/api/push/status" -> ok(pushStatus());
                 case "/api/debug" -> ok(debugSnapshot());
                 case "/api/calls/status" -> ok(callSnapshot().toString());
+                case "/api/history/status" -> ok(new AndroidHistoryReader(context).status().toString());
                 case "/api/calls/events" -> waitForCallEvent(pathAndQuery);
                 case "/api/events" -> waitForAgentEvent(pathAndQuery);
                 case "/api/sms" -> ok(smsStore.localMessages().toString());
@@ -120,6 +121,11 @@ final class StandaloneAgentGateway {
         if (!"POST".equalsIgnoreCase(method)) return error(405, "method_not_allowed");
         JSONObject input = body == null || body.isBlank() ? new JSONObject() : new JSONObject(body);
         return switch (path) {
+            case "/api/history/page" -> {
+                try { yield ok(new AndroidHistoryReader(context).page(input).toString()); }
+                catch (SecurityException denied) { yield error(403, denied.getMessage()); }
+                catch (IllegalArgumentException invalid) { yield error(400, invalid.getMessage()); }
+            }
             case "/api/push/register" -> ok(registerPairing(input.toString()));
             case "/api/push/mode" -> ok(store.setCloudEnabled(
                     input.optBoolean("enabled", false)).toString());

@@ -108,6 +108,10 @@ struct AirSIMAPI: Sendable {
 
     func health() async throws -> AgentHealth { try await get("api/health") }
     func callStatus() async throws -> CallStatus { try await get("api/calls/status") }
+    func androidHistoryStatus() async throws -> AndroidHistoryStatus { try await get("api/history/status", timeout: 10) }
+    func androidHistoryPage(_ request: AndroidHistoryRequest) async throws -> AndroidHistoryPage {
+        try await postDecoded("api/history/page", request, timeout: 20)
+    }
     func waitForAgentEvent(after revision: UInt64, timeout: TimeInterval = 15) async throws -> AgentEventStatus {
         let boundedTimeout = min(30, max(1, timeout))
         var components = URLComponents(

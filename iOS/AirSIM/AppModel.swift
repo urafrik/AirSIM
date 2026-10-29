@@ -236,6 +236,10 @@ final class AppModel: ObservableObject {
     @Published var activeCall: CallRecord?
     @Published var callHistory: [CallRecord] = []
     @Published var messages: [SMSMessage] = []
+    @Published private(set) var sendingSMS = false
+    @Published private(set) var historySyncRunning = false
+    @Published private(set) var historySyncMessage = ""
+    private var historySyncTask: Task<Void, Never>?
     @Published private var readMessageIDs = Set(UserDefaults.standard.stringArray(forKey: "airsim.sms-read-ids") ?? [])
     var unreadMessageCount: Int { messages.filter { isMessageUnread($0) }.count }
 
@@ -1504,10 +1508,75 @@ final class AppModel: ObservableObject {
 #endif
     }
 
+    func cancelHistorySync() { historySyncTask?.cancel() }
+
+    func startHistorySync(startMS: Int64, endMS: Int64, sms: Bool, calls: Bool) {
+        guard !historySyncRunning, sms || calls else { return }
+        guard activeCall == nil else { historySyncMessage = "请在通话结束后同步历史记录"; return }
+        guard let source = verifiedVoWLANAPI() else { historySyncMessage = "请先连接安卓手机"; return }
+        historySyncRunning = true
+        historySyncMessage = "正在检查安卓读取权限…"
+        historySyncTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            var smsCount = 0, callCount = 0
+            defer { self.historySyncRunning = false; self.historySyncTask = nil }
+            do {
+                let status = try await source.androidHistoryStatus()
+                guard status.supported else { throw self.historyImportError("请先更新安卓 AirSIM 到 87 或更高版本") }
+                guard (!sms || status.smsAllowed) && (!calls || status.callsAllowed) else {
+                    throw self.historyImportError("请在安卓 AirSIM 设置中点击“授权历史记录读取”，允许短信和通话记录权限；也可取消勾选未授权的类型。")
+                }
+                for kind in [sms ? "sms" : nil, calls ? "calls" : nil].compactMap({ $0 }) {
+                    var after: Int64 = 0, upper: Int64 = 0
+                    repeat {
+                        try Task.checkCancellation()
+                        guard self.activeCall == nil else { throw self.historyImportError("来电或通话开始，同步已停止；已导入记录已保留，通话结束后可重试") }
+                        let page = try await source.androidHistoryPage(AndroidHistoryRequest(
+                            kind: kind, startMS: startMS, endMS: endMS, afterID: after, snapshotMaxID: upper))
+                        try Task.checkCancellation()
+                        guard !page.hasMore || page.nextID > after else { throw self.historyImportError("安卓分页游标没有前进，请更新安卓后重试") }
+                        if kind == "sms" {
+                            let before = Set(self.messages.map(\.id))
+                            let merged = AndroidHistoryMerge.messages(local: self.messages, imported: page.messages)
+                            guard self.historyStore.saveMessages(merged) else { throw self.historyImportError("无法保存短信，请检查 iPhone 剩余空间") }
+                            for message in merged where !before.contains(message.id) && message.sourceRead == true {
+                                self.readMessageIDs.insert(message.id)
+                            }
+                            UserDefaults.standard.set(Array(self.readMessageIDs), forKey: "airsim.sms-read-ids")
+                            self.messages = merged
+                            smsCount += page.messages.count
+                        } else {
+                            let merged = AndroidHistoryMerge.calls(local: self.callHistory, imported: page.calls)
+                            guard self.historyStore.saveCallHistory(merged) else { throw self.historyImportError("无法保存通话记录，请检查 iPhone 剩余空间") }
+                            self.callHistory = merged
+                            callCount += page.calls.count
+                        }
+                        self.historySyncMessage = "已读取短信 \(smsCount) 条、通话 \(callCount) 条，重复记录自动合并…"
+                        after = page.nextID; upper = page.snapshotMaxID
+                        if !page.hasMore { break }
+                        await Task.yield()
+                    } while true
+                }
+                self.historySyncMessage = "同步完成：读取短信 \(smsCount) 条、通话 \(callCount) 条（含已合并的重复记录）"
+            } catch is CancellationError {
+                self.historySyncMessage = "同步已取消，已读取短信 \(smsCount) 条、通话 \(callCount) 条；已保存的记录会保留，可重新同步。"
+            } catch {
+                self.historySyncMessage = "同步停止：\(error.localizedDescription)\n已读取短信 \(smsCount) 条、通话 \(callCount) 条，已保存记录保留。首次使用请确认安卓已更新到 87。"
+            }
+        }
+    }
+
+    private func historyImportError(_ message: String) -> NSError {
+        NSError(domain: "AirSIMHistory", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+    }
+
     func sendSMS(to phone: String, content: String) async -> Bool {
         let target = Self.validatedNumber(phone)
         let body = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !target.isEmpty, !body.isEmpty, body.count <= 2_000 else { return false }
+        guard !sendingSMS else { return false }
+        sendingSMS = true
+        defer { sendingSMS = false }
         do {
             let localAPI = verifiedVoWLANAPI()
             let localReachable = localAPI != nil && isOnline && !isReconnecting
@@ -1626,23 +1695,15 @@ final class AppModel: ObservableObject {
             for message in messages { messagesByID[message.id] = message }
             for message in storedMessages { messagesByID[message.id] = message }
             messages = normalizedMessages(Array(messagesByID.values))
+            // Persist stable legacy identities immediately, so ISO8601 date rounding cannot
+            // turn one sent message into another record on the next foreground restore.
+            historyStore.saveMessages(messages)
         }
     }
 
     /// 远端列表可能因模块重启、自动清理或离线而变短，因此只做并集，不删除手机副本。
     private func mergeCallHistory(_ remote: [CallRecord]) async -> [CallRecord] {
-        var byID: [String: CallRecord] = [:]
-        for record in callHistory {
-            if let existing = byID[record.id], existing.updatedAt >= record.updatedAt { continue }
-            byID[record.id] = record
-        }
-        for record in remote {
-            if let local = byID[record.id], local.updatedAt > record.updatedAt {
-                continue
-            }
-            byID[record.id] = record
-        }
-        let merged = normalizedCallHistory(Array(byID.values))
+        let merged = AndroidHistoryMerge.calls(local: callHistory, imported: remote)
         if !remote.isEmpty, historyStore.saveCallHistory(merged) {
             // 只有手机副本写入成功才确认模块，断线时模块仍会保留未交付队列。
             let persistedIDs = Set(merged.map(\.id))
@@ -1657,14 +1718,7 @@ final class AppModel: ObservableObject {
     private func mergeMessages(
         _ remote: [SMSMessage], acknowledgingOn source: AirSIMAPI
     ) async -> [SMSMessage] {
-        var byID: [String: SMSMessage] = [:]
-        for message in messages { byID[message.id] = message }
-        for var message in remote {
-            // 旧版模块没有 delivery_id 时保留手机已有标识，避免新旧版本来回覆盖。
-            if message.deliveryID == nil { message.deliveryID = byID[message.id]?.deliveryID }
-            byID[message.id] = message
-        }
-        let merged = normalizedMessages(Array(byID.values))
+        let merged = AndroidHistoryMerge.messages(local: messages, imported: remote)
         if !remote.isEmpty, historyStore.saveMessages(merged) {
             let persistedIDs = Set(merged.map(\.id))
             let acknowledgedIDs = remote
@@ -1682,7 +1736,7 @@ final class AppModel: ObservableObject {
             content: content,
             at: .now,
             to: messages,
-            limit: maxMessageCount
+            limit: max(maxMessageCount, messages.count + 1)
         )
         messages = updatedMessages
         if !historyStore.saveMessages(updatedMessages) {
@@ -1691,15 +1745,11 @@ final class AppModel: ObservableObject {
     }
 
     private func normalizedCallHistory(_ records: [CallRecord]) -> [CallRecord] {
-        Array(records
-            .sorted { $0.updatedAt > $1.updatedAt }
-            .prefix(maxCallHistoryCount))
+        records.sorted { $0.startedAt > $1.startedAt }
     }
 
     private func normalizedMessages(_ records: [SMSMessage]) -> [SMSMessage] {
-        Array(records
-            .sorted { $0.timestamp > $1.timestamp }
-            .prefix(maxMessageCount))
+        SMSHistoryPolicy.canonicalized(records).sorted { $0.displayTimestamp > $1.displayTimestamp }
     }
 
     private func perform(

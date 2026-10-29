@@ -54,6 +54,7 @@ public final class MainActivity extends Activity {
     private static final int ROLE_REQUEST = 100;
     private static final int DEFAULT_APPS_REQUEST = 102;
     private static final int OPTIONAL_SMS_REQUEST = 103;
+    private static final int HISTORY_PERMISSION_REQUEST = 104;
     private static final String OPTIONAL_SMS_PROMPTED = "optional_sms_prompted";
     private static final java.util.concurrent.ExecutorService SMS_SCAN_WORKER =
             Executors.newSingleThreadExecutor();
@@ -167,6 +168,7 @@ public final class MainActivity extends Activity {
 	@Override public void onRequestPermissionsResult(
 			int requestCode, String[] permissions, int[] grantResults) {
 		super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+		if (requestCode == HISTORY_PERMISSION_REQUEST && currentPage == Page.SETTINGS) showPage(Page.SETTINGS);
 		if (requestCode == 101) requestOptionalSMSPermission();
 		if (requestCode == OPTIONAL_SMS_REQUEST) {
 			startSMSInboxBaselineIfAuthorized();
@@ -518,6 +520,29 @@ public final class MainActivity extends Activity {
 			smsCard.addView(permissionAction, matchWithTop(10));
 		}
 		root.addView(smsCard, matchWithTop(10));
+
+        root.addView(sectionTitle("同步历史记录到 iPhone"), matchWithTop(22));
+        LinearLayout historyCard = card(SURFACE, 22);
+        historyCard.setOrientation(LinearLayout.VERTICAL);
+        historyCard.setPadding(dp(16), dp(16), dp(16), dp(16));
+        boolean callsGranted = checkSelfPermission(Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED;
+        historyCard.addView(description("短信读取：" + (inboxGranted ? "已允许" : "未允许")
+                + " · 通话记录读取：" + (callsGranted ? "已允许" : "未允许")
+                + "。授权后在 iPhone 的设置中选择同步日期范围；只读取，不删除安卓记录。"));
+        TextView historyPermission = secondaryButton("授权历史记录读取");
+        historyPermission.setOnClickListener(ignored -> {
+            List<String> missing = new ArrayList<>();
+            if (checkSelfPermission(Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) missing.add(Manifest.permission.READ_SMS);
+            if (checkSelfPermission(Manifest.permission.READ_CALL_LOG) != PackageManager.PERMISSION_GRANTED) missing.add(Manifest.permission.READ_CALL_LOG);
+            if (!missing.isEmpty()) requestPermissions(missing.toArray(new String[0]), HISTORY_PERMISSION_REQUEST);
+            else Toast.makeText(this, "已授权，请在 iPhone 发起同步", Toast.LENGTH_SHORT).show();
+        });
+        historyCard.addView(historyPermission, matchWithTop(10));
+        TextView historySystemSettings = secondaryButton("打开系统应用权限设置");
+        historySystemSettings.setOnClickListener(ignored -> startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:" + getPackageName()))));
+        historyCard.addView(historySystemSettings, matchWithTop(10));
+        root.addView(historyCard, matchWithTop(10));
 
 		if (!standaloneRuntime) {
 		root.addView(sectionTitle("AVF Linux 首次安装"), matchWithTop(22));

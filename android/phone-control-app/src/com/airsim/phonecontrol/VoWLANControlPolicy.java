@@ -5,9 +5,9 @@ import java.util.Set;
 public final class VoWLANControlPolicy {
     private static final Set<String> GET_ROUTES = Set.of(
             "/v1/health", "/api/health", "/api/status", "/api/events", "/api/calls/status", "/api/calls/events",
-            "/api/calls/audio/host/config", "/api/push/status", "/api/sms", "/api/sms/status");
+            "/api/calls/audio/host/config", "/api/push/status", "/api/sms", "/api/sms/status", "/api/history/status");
     private static final Set<String> POST_ROUTES = Set.of(
-            "/api/calls/dial", "/api/calls/answer", "/api/calls/reject",
+            "/api/history/page", "/api/calls/dial", "/api/calls/answer", "/api/calls/reject",
             "/api/calls/hangup", "/api/calls/dtmf", "/api/calls/audio/mute",
             "/api/calls/audio/host/warmup", "/api/calls/audio/host/register", "/api/push/register", "/api/push/mode",
 			"/api/sms/send", "/api/sms/ack", "/api/sms/refresh");

@@ -1,5 +1,54 @@
 import SwiftUI
 
+struct AndroidHistorySyncView: View {
+    @EnvironmentObject private var model: AppModel
+    @State private var range: AndroidHistoryRange = .threeDays
+    @State private var start = Calendar.current.date(byAdding: .day, value: -6, to: .now) ?? .now
+    @State private var end = Date.now
+    @State private var sms = true
+    @State private var calls = true
+
+    var body: some View {
+        Form {
+            Section("同步内容") {
+                Toggle("短信（收到与已发送）", isOn: $sms)
+                Toggle("通话记录", isOn: $calls)
+            }.disabled(model.historySyncRunning)
+            Section {
+                Picker("日期范围", selection: $range) {
+                    ForEach(AndroidHistoryRange.allCases) { item in Text(item.title).tag(item) }
+                }
+                if range == .custom {
+                    DatePicker("开始日期", selection: $start, in: Date(timeIntervalSince1970: 0)...Date.now, displayedComponents: .date)
+                    DatePicker("结束日期", selection: $end, in: Date(timeIntervalSince1970: 0)...Date.now, displayedComponents: .date)
+                }
+            } header: { Text("同步范围") } footer: {
+                Text("按 iPhone 的本地日期计算，最近 3 天、7 天均包含今天；自定义范围包含开始和结束日期。全部会分页读取，不限制为最近 500 条或 2000 条。")
+            }.disabled(model.historySyncRunning)
+            Section {
+                if model.historySyncRunning {
+                    HStack { ProgressView(); Text("正在同步，请保持 AirSIM 在前台") }
+                    Button("取消同步", role: .destructive) { model.cancelHistorySync() }
+                } else {
+                    Button("开始同步") {
+                        if let bounds = range.bounds(start: start, end: end) {
+                            model.startHistorySync(startMS: bounds.0, endMS: bounds.1, sms: sms, calls: calls)
+                        }
+                    }
+                    .disabled((!sms && !calls) || range.bounds(start: start, end: end) == nil || model.activeCall != nil)
+                }
+                if !model.historySyncMessage.isEmpty {
+                    Text(model.historySyncMessage).font(.footnote).textSelection(.enabled)
+                }
+            } footer: {
+                Text("先更新安卓 AirSIM，并在安卓设置中点“授权历史记录读取”。同步通过已配对的安卓直连完成，不删除或修改安卓记录；中断后可重试。新导入短信采用安卓的已读状态，已有短信保留 iPhone 的阅读状态。系统日志无法判断零秒呼出是否接通时，只显示呼出。")
+            }
+        }
+        .navigationTitle("同步安卓历史记录")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
 /// AirSIM 只引导安卓手机配对；不检查旧模块 USB ECM、AT 或 QDC507 固件。
 struct AirSIMFirstConnectionView: View {
     @EnvironmentObject private var model: AppModel
@@ -311,6 +360,12 @@ struct AirSIMSettingsView: View {
                     Text("通话录音")
                 } footer: {
                     Text("在通话页点击录音后，双向语音仅保存在本机。停止录音或挂断后可在这里分享，也可从“文件 → 我的 iPhone → AirSIM → Recordings”访问。")
+                }
+
+                Section {
+                    NavigationLink("从安卓同步通话记录与短信") { AndroidHistorySyncView() }
+                } header: { Text("历史记录") } footer: {
+                    Text("支持最近 3 天、7 天、自定义范围和全部。只读取安卓系统记录，重复同步自动合并，不删除安卓原件。")
                 }
 
                 Section("关于") {

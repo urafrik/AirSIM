@@ -4,7 +4,7 @@ import Foundation
 
 /// 模块侧返回的单次通话记录。
 struct CallRecord: Codable, Equatable, Sendable, Identifiable {
-    let id: String
+    var id: String
     let index: Int
     let direction: String
     let state: String
@@ -16,11 +16,21 @@ struct CallRecord: Codable, Equatable, Sendable, Identifiable {
     /// Optional for compatibility with existing saved records and older agents.
     var connectedAt: Date? = nil
     var wasConnected: Bool? = nil
+    var androidHistoryID: String? = nil
+    var systemCallType: String? = nil
+    var durationSeconds: Int? = nil
 
-    var isUnanswered: Bool { missed || (endedAt != nil && wasConnected == false) }
+    var isUnanswered: Bool { missed || ((endedAt != nil || state == "ended") && wasConnected == false) }
+    var isMissedIncoming: Bool {
+        direction == "incoming" && (missed || (isUnanswered && systemCallType == nil))
+    }
     var outcomeTitle: String {
+        if systemCallType == "rejected" { return "已拒接" }
+        if systemCallType == "blocked" { return "已拦截" }
+        if systemCallType == "voicemail" { return "语音信箱记录" }
+        if systemCallType == "answered_elsewhere" { return "在其他设备接听" }
         if missed { return "未接来电" }
-        if endedAt != nil, wasConnected == false {
+        if endedAt != nil || state == "ended", wasConnected == false {
             return direction == "incoming" ? "未接来电" : "呼出未接通"
         }
         if wasConnected == true || connectedAt != nil {
@@ -30,6 +40,9 @@ struct CallRecord: Codable, Equatable, Sendable, Identifiable {
     }
 
     enum CodingKeys: String, CodingKey {
+        case androidHistoryID = "android_history_id"
+        case systemCallType = "system_call_type"
+        case durationSeconds = "duration_seconds"
         case connectedAt = "connected_at"
         case wasConnected = "was_connected"
         case id, index, direction, state, number, missed
@@ -208,12 +221,16 @@ struct SMSMessage: Codable, Equatable, Sendable, Identifiable {
     var direction: SMSDirection? = nil
     /// Android receipt time is separate from the carrier timestamp used for deduplication.
     var receivedAt: Date? = nil
+    var localID: String? = nil
+    var androidHistoryID: String? = nil
+    var sourceRead: Bool? = nil
     var displayTimestamp: Date { receivedAt ?? timestamp }
 
     var isOutgoing: Bool { direction == .outgoing }
 
     /// 新版 Agent 用 delivery_id 对齐 APNs 与本地同步；旧版仍回退到内容指纹。
     var id: String {
+        if let localID { return localID }
         if let deliveryID, !deliveryID.isEmpty { return "delivery:\(deliveryID)" }
         return "\(sender)\u{0}\(timestamp.timeIntervalSince1970)\u{0}\(content)\u{0}\(direction?.rawValue ?? SMSDirection.incoming.rawValue)"
     }
@@ -221,6 +238,9 @@ struct SMSMessage: Codable, Equatable, Sendable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case sender, content, code, timestamp, direction
         case receivedAt = "received_at"
+        case localID = "local_id"
+        case androidHistoryID = "android_history_id"
+        case sourceRead = "source_read"
         case deliveryID = "delivery_id"
     }
 }
@@ -249,12 +269,163 @@ enum SMSHistoryPolicy {
             content: content,
             code: nil,
             timestamp: timestamp,
-            deliveryID: nil,
+            deliveryID: "local-sent-" + UUID().uuidString,
             direction: .outgoing
         )
-        return Array((messages + [sentMessage])
+        return Array((canonicalized(messages) + [sentMessage])
             .sorted { $0.timestamp > $1.timestamp }
             .prefix(max(0, limit)))
+    }
+
+    /// Repair the legacy fractional-second / ISO8601 round-trip duplicates only.
+    /// Never collapse independent messages carrying stable send or provider identifiers.
+    static func canonicalized(_ messages: [SMSMessage]) -> [SMSMessage] {
+        var unique: [String: SMSMessage] = [:]
+        for message in messages { unique[message.id] = message }
+        let legacy = unique.values.filter { $0.isOutgoing && $0.deliveryID == nil && $0.localID == nil }
+        let preciseKeys = Set(legacy.filter {
+            abs($0.timestamp.timeIntervalSince1970 - floor($0.timestamp.timeIntervalSince1970)) > 0.000_001
+        }.map { legacySecondKey($0) })
+        return unique.values.compactMap { value in
+            if value.isOutgoing && value.deliveryID == nil && value.localID == nil,
+               abs(value.timestamp.timeIntervalSince1970 - floor(value.timestamp.timeIntervalSince1970)) <= 0.000_001,
+               preciseKeys.contains(legacySecondKey(value)) { return nil }
+            var message = value
+            if message.deliveryID == nil && message.localID == nil { message.localID = message.id }
+            return message
+        }
+    }
+    private static func legacySecondKey(_ message: SMSMessage) -> String {
+        "\(message.sender)\u{0}\(message.content)\u{0}\(Int64(floor(message.timestamp.timeIntervalSince1970)))"
+    }
+}
+
+struct AndroidHistoryStatus: Decodable {
+    let supported: Bool
+    let smsAllowed: Bool
+    let callsAllowed: Bool
+    enum CodingKeys: String, CodingKey { case supported; case smsAllowed = "sms_allowed"; case callsAllowed = "calls_allowed" }
+}
+
+struct AndroidHistoryRequest: Encodable {
+    let kind: String
+    let startMS: Int64
+    let endMS: Int64
+    let afterID: Int64
+    let snapshotMaxID: Int64
+    enum CodingKeys: String, CodingKey {
+        case kind; case startMS = "start_ms"; case endMS = "end_ms"
+        case afterID = "after_id"; case snapshotMaxID = "snapshot_max_id"
+    }
+}
+
+struct AndroidHistoryPage: Decodable {
+    let messages: [SMSMessage]
+    let calls: [CallRecord]
+    let nextID: Int64
+    let snapshotMaxID: Int64
+    let hasMore: Bool
+    enum CodingKeys: String, CodingKey {
+        case messages, calls; case nextID = "next_id"; case snapshotMaxID = "snapshot_max_id"; case hasMore = "has_more"
+    }
+}
+
+enum AndroidHistoryRange: String, CaseIterable, Identifiable {
+    case threeDays, sevenDays, custom, all
+    var id: String { rawValue }
+    var title: String {
+        switch self { case .threeDays: return "最近 3 天"; case .sevenDays: return "最近 7 天"
+        case .custom: return "自定义范围"; case .all: return "全部" }
+    }
+    func bounds(start: Date, end: Date, now: Date = .now, calendar: Calendar = .current) -> (Int64, Int64)? {
+        if self == .all { return (0, Int64.max) }
+        let today = calendar.startOfDay(for: now)
+        let lower: Date
+        let upper: Date
+        if self == .custom {
+            lower = calendar.startOfDay(for: start)
+            guard let next = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: end)) else { return nil }
+            upper = next
+        } else {
+            guard let first = calendar.date(byAdding: .day, value: self == .threeDays ? -2 : -6, to: today),
+                  let next = calendar.date(byAdding: .day, value: 1, to: today) else { return nil }
+            lower = first; upper = next
+        }
+        guard lower < upper, lower.timeIntervalSince1970 >= 0 else { return nil }
+        return (Int64(lower.timeIntervalSince1970 * 1000), Int64(upper.timeIntervalSince1970 * 1000))
+    }
+}
+
+enum AndroidHistoryMerge {
+    static func phone(_ number: String) -> String {
+        let digits = number.filter(\.isNumber)
+        return digits.hasPrefix("86") && digits.count == 13 ? String(digits.dropFirst(2)) : digits
+    }
+    static func messages(local: [SMSMessage], imported: [SMSMessage]) -> [SMSMessage] {
+        var result = SMSHistoryPolicy.canonicalized(local)
+        var ids = Dictionary(result.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
+        var sources = Dictionary(result.enumerated().compactMap { index, value in value.androidHistoryID.map { ($0, index) } }, uniquingKeysWith: { first, _ in first })
+        let candidates = result.indices.filter { result[$0].isOutgoing && result[$0].androidHistoryID == nil }
+        var used = Set<Int>()
+        for var message in imported {
+            var index = ids[message.id] ?? message.androidHistoryID.flatMap { sources[$0] }
+            if index == nil && message.isOutgoing && message.androidHistoryID != nil {
+                index = candidates.filter {
+                    !used.contains($0) && result[$0].content == message.content && !phone(message.sender).isEmpty
+                    && phone(result[$0].sender) == phone(message.sender)
+                    && abs(result[$0].timestamp.timeIntervalSince(message.timestamp)) <= 15
+                }.min { abs(result[$0].timestamp.timeIntervalSince(message.timestamp)) < abs(result[$1].timestamp.timeIntervalSince(message.timestamp)) }
+            }
+            if let index {
+                used.insert(index)
+                let old = result[index]
+                message.localID = old.id
+                message.androidHistoryID = message.androidHistoryID ?? old.androidHistoryID
+                message.receivedAt = message.receivedAt ?? old.receivedAt
+                result[index] = message
+                ids[message.id] = index
+                if let source = message.androidHistoryID { sources[source] = index }
+            } else {
+                ids[message.id] = result.count
+                if let source = message.androidHistoryID { sources[source] = result.count }
+                result.append(message)
+            }
+        }
+        return result.sorted { $0.displayTimestamp > $1.displayTimestamp }
+    }
+    static func calls(local: [CallRecord], imported: [CallRecord]) -> [CallRecord] {
+        var result = local
+        var ids = Dictionary(result.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
+        var sources = Dictionary(result.enumerated().compactMap { index, value in value.androidHistoryID.map { ($0, index) } }, uniquingKeysWith: { first, _ in first })
+        var used = Set<Int>()
+        for var record in imported {
+            var index = ids[record.id] ?? record.androidHistoryID.flatMap { sources[$0] }
+            if index == nil, let number = record.number, !phone(number).isEmpty, record.state == "ended" {
+                index = result.indices.filter {
+                    !used.contains($0) && result[$0].state == "ended" && result[$0].direction == record.direction
+                    && ((result[$0].androidHistoryID == nil) != (record.androidHistoryID == nil))
+                    && result[$0].number.map { phone($0) == phone(number) } == true
+                    && abs(result[$0].startedAt.timeIntervalSince(record.startedAt)) <= 5
+                }.min { abs(result[$0].startedAt.timeIntervalSince(record.startedAt)) < abs(result[$1].startedAt.timeIntervalSince(record.startedAt)) }
+            }
+            if let index {
+                used.insert(index)
+                let old = result[index]
+                if record.androidHistoryID == nil && old.androidHistoryID != nil { continue }
+                if old.androidHistoryID == nil && record.androidHistoryID == nil && old.updatedAt > record.updatedAt { continue }
+                record.id = old.id
+                record.wasConnected = record.wasConnected ?? old.wasConnected
+                record.connectedAt = record.connectedAt ?? old.connectedAt
+                record.androidHistoryID = record.androidHistoryID ?? old.androidHistoryID
+                result[index] = record
+                if let source = record.androidHistoryID { sources[source] = index }
+            } else {
+                ids[record.id] = result.count
+                if let source = record.androidHistoryID { sources[source] = result.count }
+                result.append(record)
+            }
+        }
+        return result.sorted { $0.startedAt > $1.startedAt }
     }
 }
 

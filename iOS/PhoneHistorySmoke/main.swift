@@ -43,3 +43,67 @@ let missedJSON = legacy.replacingOccurrences(of: "outgoing", with: "incoming")
 let missed = try decoder.decode(CallRecord.self, from: Data(missedJSON.utf8))
 precondition(missed.isUnanswered && missed.outcomeTitle == "未接来电")
 print("PASS: SMS unread persistence, per-thread/all read actions, outgoing exclusion, old call decoding and outcomes")
+
+// Regression: the legacy sent ID used sub-second Date but disk ISO8601 rounded it.
+let fractional = SMSMessage(sender: "10086", content: "hi", code: nil, timestamp: now.addingTimeInterval(0.123), direction: .outgoing)
+let roundedCopy = try decoder.decode(SMSMessage.self, from: encoder.encode(fractional))
+precondition(fractional.id != roundedCopy.id)
+let repaired = SMSHistoryPolicy.canonicalized([fractional, roundedCopy])
+precondition(repaired.count == 1)
+let onDisk = try decoder.decode([SMSMessage].self, from: encoder.encode(repaired))
+precondition(onDisk[0].id == repaired[0].id)
+precondition(SMSHistoryPolicy.canonicalized(repaired + onDisk).count == 1)
+var sent = SMSHistoryPolicy.appendingSentMessage(recipient: "10086", content: "hi", at: now, to: [], limit: 3000)
+sent = SMSHistoryPolicy.appendingSentMessage(recipient: "10086", content: "hi", at: now, to: sent, limit: 3000)
+precondition(sent.count == 2 && sent[0].id != sent[1].id) // Genuine repeated sends stay separate.
+precondition(SMSHistoryPolicy.canonicalized(sent).count == 2)
+
+var providerSMS = SMSMessage(sender: "10086", content: "hi", code: nil, timestamp: now.addingTimeInterval(1),
+    deliveryID: "android-history-phone-sms-1", direction: .outgoing)
+providerSMS.androidHistoryID = "android-history-phone-sms-1"
+let oneLocal = [sent[0]]
+let mergedSent = AndroidHistoryMerge.messages(local: oneLocal, imported: [providerSMS])
+precondition(mergedSent.count == 1 && mergedSent[0].id == sent[0].id)
+precondition(AndroidHistoryMerge.messages(local: mergedSent, imported: [providerSMS]).count == 1)
+var secondSMS = providerSMS
+secondSMS.deliveryID = "android-history-phone-sms-2"
+secondSMS.androidHistoryID = "android-history-phone-sms-2"
+precondition(AndroidHistoryMerge.messages(local: [], imported: [providerSMS, secondSMS]).count == 2)
+precondition(AndroidHistoryMerge.messages(local: sent, imported: [providerSMS, secondSMS]).count == 2)
+let many = (0..<2300).map { index -> SMSMessage in
+    SMSMessage(sender: "10086", content: "\(index)", code: nil, timestamp: now, deliveryID: "row-\(index)")
+}
+let mergedMany = AndroidHistoryMerge.messages(local: [], imported: many)
+precondition(mergedMany.count == 2300)
+precondition(AndroidHistoryMerge.messages(local: mergedMany, imported: many).count == 2300)
+
+var systemCall = oldCall
+systemCall.id = "provider-call-1"
+systemCall.androidHistoryID = systemCall.id
+systemCall.wasConnected = true
+systemCall.systemCallType = "outgoing"
+let mergedCall = AndroidHistoryMerge.calls(local: [oldCall], imported: [systemCall])
+precondition(mergedCall.count == 1 && mergedCall[0].id == oldCall.id && mergedCall[0].wasConnected == true)
+precondition(AndroidHistoryMerge.calls(local: mergedCall, imported: [systemCall]).count == 1)
+precondition(AndroidHistoryMerge.calls(local: mergedCall, imported: [oldCall])[0].wasConnected == true)
+var rejected = missed
+rejected.androidHistoryID = "rejected"
+rejected.systemCallType = "rejected"
+// Native rejected log rows are not missed calls.
+let rejectedJSON = missedJSON.replacingOccurrences(of: "\"missed\":true", with: "\"missed\":false")
+var declined = try decoder.decode(CallRecord.self, from: Data(rejectedJSON.utf8))
+declined.systemCallType = "rejected"; declined.wasConnected = false
+precondition(!declined.isMissedIncoming && declined.outcomeTitle == "已拒接")
+
+var calendar = Calendar(identifier: .gregorian)
+calendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+let formatter = ISO8601DateFormatter()
+let dstDay = formatter.date(from: "2026-03-08T18:00:00Z")!
+let dstBounds = AndroidHistoryRange.custom.bounds(start: dstDay, end: dstDay, now: dstDay, calendar: calendar)!
+precondition(dstBounds.1 - dstBounds.0 == 23 * 60 * 60 * 1000)
+precondition(AndroidHistoryRange.custom.bounds(start: dstDay.addingTimeInterval(86400), end: dstDay, now: dstDay, calendar: calendar) == nil)
+let three = AndroidHistoryRange.threeDays.bounds(start: now, end: now, now: now, calendar: calendar)!
+let seven = AndroidHistoryRange.sevenDays.bounds(start: now, end: now, now: now, calendar: calendar)!
+precondition(three.1 == seven.1 && seven.0 < three.0)
+precondition(AndroidHistoryRange.all.bounds(start: now, end: now)!.1 == Int64.max)
+print("PASS: legacy duplicate repair, stable send IDs, deliberate repeats, provider reconciliation, repeated 2300-row imports, call results, inclusive dates and DST")
