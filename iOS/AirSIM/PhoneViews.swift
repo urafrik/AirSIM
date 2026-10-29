@@ -760,7 +760,7 @@ struct MessagesView: View {
 
     private var conversations: [(sender: String, messages: [SMSMessage])] {
         Dictionary(grouping: model.messages, by: \.sender)
-            .map { ($0.key, $0.value.sorted { $0.timestamp < $1.timestamp }) }
+            .map { ($0.key, $0.value.sorted { $0.displayTimestamp < $1.displayTimestamp }) }
             .sorted { ($0.messages.last?.displayTimestamp ?? .distantPast) > ($1.messages.last?.displayTimestamp ?? .distantPast) }
     }
 
@@ -920,7 +920,7 @@ private struct MessageThreadView: View {
     private var messages: [SMSMessage] {
         model.messages
             .filter { $0.sender == sender }
-            .sorted { $0.timestamp < $1.timestamp }
+            .sorted { $0.displayTimestamp < $1.displayTimestamp }
     }
 
     var body: some View {

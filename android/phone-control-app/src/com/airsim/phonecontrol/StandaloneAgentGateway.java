@@ -285,7 +285,7 @@ final class StandaloneAgentGateway {
                             .put("started_at", Instant.now().toString()).put("missed", false)
                             .put("was_connected", false);
                 }
-                if ("active".equals(state) || "holding".equals(state)) {
+                if ("active".equals(state) || "held".equals(state)) {
                     activeCall.put("was_connected", true);
                     if (!activeCall.has("connected_at")) activeCall.put("connected_at", Instant.now().toString());
                 }
