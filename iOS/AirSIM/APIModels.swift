@@ -206,6 +206,9 @@ struct SMSMessage: Codable, Equatable, Sendable, Identifiable {
     var deliveryID: String?
     /// 旧模块没有方向字段，缺省按收到的短信展示；发送成功后由 App 标记为 outgoing。
     var direction: SMSDirection? = nil
+    /// Android receipt time is separate from the carrier timestamp used for deduplication.
+    var receivedAt: Date? = nil
+    var displayTimestamp: Date { receivedAt ?? timestamp }
 
     var isOutgoing: Bool { direction == .outgoing }
 
@@ -217,6 +220,7 @@ struct SMSMessage: Codable, Equatable, Sendable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case sender, content, code, timestamp, direction
+        case receivedAt = "received_at"
         case deliveryID = "delivery_id"
     }
 }

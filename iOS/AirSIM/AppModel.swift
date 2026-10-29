@@ -1029,7 +1029,7 @@ final class AppModel: ObservableObject {
             if isOnline { isOnline = false }
             lastSuccessfulLocalAPI = nil
             audio.updateIncomingVibration(call: nil, inApp: false)
-        audio.stopCallTone()
+            audio.stopCallTone()
             await awaitCloudStatusForLiveActivity(call: nil)
             let cloudStatus = CloudModePreference.isEnabled() &&
                 Date().timeIntervalSince(lastCloudStatusRefresh) <= 90
@@ -1764,7 +1764,7 @@ final class AppModel: ObservableObject {
             let pcmRoute = currentPCMRoute ?? Self.pcmRoute(for: localAPI.route)
             // Prefer carrier ringback/announcements over the app's synthetic waiting tone.
             audio.updateIncomingVibration(call: nil, inApp: false)
-        audio.stopCallTone()
+            audio.stopCallTone()
             // 先完成麦克风授权和 AVAudioEngine 启动，再让 Agent 开始等待 PCM
             // 客户端。否则首次授权停留超过 Agent 的等待窗口时，helper 会被提前杀死。
             let outcome = try await LocalCallAudioStartupCoordinator.start(

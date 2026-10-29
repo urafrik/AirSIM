@@ -256,7 +256,9 @@ final class AudioSessionController: ObservableObject {
         guard incomingVibrationTask == nil else { return }
         incomingVibrationTask = Task { @MainActor in
             while !Task.isCancelled {
-                AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
+                if UserDefaults.standard.object(forKey: "airsim.incoming-vibration") as? Bool ?? true {
+                    AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
+                }
                 do { try await Task.sleep(nanoseconds: 1_500_000_000) } catch { return }
             }
         }
@@ -650,6 +652,7 @@ final class AudioSessionController: ObservableObject {
         speakerRouteRetryTask?.cancel()
         speakerRouteRetryTask = nil
         speakerRoutePending = false
+        updateIncomingVibration(call: nil, inApp: false)
         stopCallTone()
         transport?.stop()
         transport = nil

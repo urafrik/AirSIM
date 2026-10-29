@@ -76,6 +76,7 @@ final class SMSInboxScanner {
                     JSONObject event = new JSONObject(WireJson.smsEvent(UUID.randomUUID().toString(),
                             deliveryID, sender == null ? "" : sender, content,
                             Instant.ofEpochMilli(timestamp).toString()));
+                    if (receivedAt > 0) event.put("received_at", Instant.ofEpochMilli(receivedAt).toString());
                     if (RuntimeMode.isStandalone(context)) {
                         StandaloneAgentGateway.get(context).sendSMSEvent(event.toString());
                     } else {

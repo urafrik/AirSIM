@@ -18,6 +18,11 @@ let encoder = JSONEncoder()
 encoder.dateEncodingStrategy = .iso8601
 let reloaded = try decoder.decode(SMSMessage.self, from: encoder.encode(incoming))
 precondition(!SMSReadPolicy.isUnread(reloaded, readIDs: readIDs))
+precondition(reloaded.receivedAt == nil && reloaded.displayTimestamp == now)
+var delayed = incoming
+delayed.receivedAt = now.addingTimeInterval(120)
+precondition(delayed.id == incoming.id) // Receipt metadata never creates a duplicate.
+precondition(delayed.displayTimestamp == now.addingTimeInterval(120))
 readIDs = SMSReadPolicy.updating(readIDs, messages: all, sender: "10086", read: false)
 precondition(SMSReadPolicy.isUnread(incoming, readIDs: readIDs))
 readIDs = SMSReadPolicy.updating(readIDs, messages: all, sender: nil, read: true)

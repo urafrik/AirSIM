@@ -761,7 +761,7 @@ struct MessagesView: View {
     private var conversations: [(sender: String, messages: [SMSMessage])] {
         Dictionary(grouping: model.messages, by: \.sender)
             .map { ($0.key, $0.value.sorted { $0.timestamp < $1.timestamp }) }
-            .sorted { ($0.messages.last?.timestamp ?? .distantPast) > ($1.messages.last?.timestamp ?? .distantPast) }
+            .sorted { ($0.messages.last?.displayTimestamp ?? .distantPast) > ($1.messages.last?.displayTimestamp ?? .distantPast) }
     }
 
     var body: some View {
@@ -899,7 +899,7 @@ struct MessagesView: View {
                     Circle().fill(.blue).frame(width: 9, height: 9)
                         .accessibilityLabel("未读短信")
                 }
-                Text(messages.last?.timestamp ?? .now, format: .dateTime.month().day().hour().minute())
+                Text(messages.last?.displayTimestamp ?? .now, format: .dateTime.month().day().hour().minute())
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -953,7 +953,7 @@ private struct MessageThreadView: View {
                                                 Label("复制短信", systemImage: "doc.on.doc")
                                             }
                                         }
-                                    Text(message.timestamp, format: .dateTime.year().month().day().hour().minute().second())
+                                    Text(message.displayTimestamp, format: .dateTime.year().month().day().hour().minute().second())
                                         .font(.caption2.monospacedDigit())
                                         .foregroundStyle(.secondary)
                                     Text(message.isOutgoing ? L10n.t("已发送") : (model.isMessageUnread(message) ? "未读" : "已读"))
