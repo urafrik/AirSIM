@@ -1712,7 +1712,10 @@ final class AppModel: ObservableObject {
                 try? await samsungAPI.acknowledgeCallHistory(ids: acknowledgedIDs)
             }
         }
-        return merged
+        // The acknowledgement suspends this actor; an import page may have arrived meanwhile.
+        let latest = AndroidHistoryMerge.calls(local: callHistory, imported: remote)
+        if latest != merged { historyStore.saveCallHistory(latest) }
+        return latest
     }
 
     private func mergeMessages(
@@ -1726,7 +1729,9 @@ final class AppModel: ObservableObject {
                 .compactMap(\.deliveryID)
             try? await source.acknowledgeMessages(ids: acknowledgedIDs)
         }
-        return merged
+        let latest = AndroidHistoryMerge.messages(local: messages, imported: remote)
+        if latest != merged { historyStore.saveMessages(latest) }
+        return latest
     }
 
     /// 模块不会在收件箱接口回传已发送短信，因此发送成功后立即写入手机本地历史。

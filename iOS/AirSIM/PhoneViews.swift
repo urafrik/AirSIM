@@ -975,8 +975,9 @@ private struct MessageThreadView: View {
                     .textFieldStyle(.roundedBorder)
                 Button {
                     let body = reply
-                    reply = ""
-                    Task { _ = await model.sendSMS(to: sender, content: body) }
+                    Task {
+                        if await model.sendSMS(to: sender, content: body), reply == body { reply = "" }
+                    }
                 } label: {
                     Image(systemName: "arrow.up.circle.fill").font(.title2)
                 }
@@ -1029,6 +1030,7 @@ private struct MessageComposer: View {
         !recipient.trimmingCharacters(in: .whitespaces).isEmpty
             && !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !sending
+            && !model.sendingSMS
     }
 
     var body: some View {
