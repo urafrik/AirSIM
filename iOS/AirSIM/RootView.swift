@@ -75,6 +75,7 @@ struct RootView: View {
                     pendingRecipient: $pendingSMSRecipient,
                     pendingConversation: $pendingSMSConversation
                 )
+                    .badge(model.unreadMessageCount)
                     .tag(PhoneTab.messages)
                     .tabItem { Label(L10n.t(PhoneTab.messages.tabTitle), systemImage: PhoneTab.messages.icon) }
 

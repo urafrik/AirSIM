@@ -1,4 +1,5 @@
 import AVFoundation
+import AudioToolbox
 import Network
 
 enum PCMRoute: Equatable, Sendable {
@@ -242,6 +243,24 @@ final class AudioSessionController: ObservableObject {
     private let callRecorder = LocalCallPCMRecorder()
     private var callTonePlayer: AVAudioPlayer?
     private var currentCallTone: CallTone?
+    private var incomingVibrationTask: Task<Void, Never>?
+
+    func updateIncomingVibration(call: CallRecord?, inApp: Bool) {
+        let enabled = UserDefaults.standard.object(forKey: "airsim.incoming-vibration") as? Bool ?? true
+        guard enabled, inApp, call?.direction == "incoming",
+              ["incoming", "waiting"].contains(call?.state ?? "") else {
+            incomingVibrationTask?.cancel()
+            incomingVibrationTask = nil
+            return
+        }
+        guard incomingVibrationTask == nil else { return }
+        incomingVibrationTask = Task { @MainActor in
+            while !Task.isCancelled {
+                AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
+                do { try await Task.sleep(nanoseconds: 1_500_000_000) } catch { return }
+            }
+        }
+    }
     private var muted = false
     private var requestedSpeakerOverride = false
     private var speakerRouteRetryTask: Task<Void, Never>?
@@ -296,6 +315,7 @@ final class AudioSessionController: ObservableObject {
     }
 
     deinit {
+        incomingVibrationTask?.cancel()
         if let routeChangeObserver {
             NotificationCenter.default.removeObserver(routeChangeObserver)
         }

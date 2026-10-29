@@ -236,6 +236,18 @@ final class AppModel: ObservableObject {
     @Published var activeCall: CallRecord?
     @Published var callHistory: [CallRecord] = []
     @Published var messages: [SMSMessage] = []
+    @Published private var readMessageIDs = Set(UserDefaults.standard.stringArray(forKey: "airsim.sms-read-ids") ?? [])
+    var unreadMessageCount: Int { messages.filter { isMessageUnread($0) }.count }
+
+    func isMessageUnread(_ message: SMSMessage) -> Bool {
+        SMSReadPolicy.isUnread(message, readIDs: readMessageIDs)
+    }
+
+    func setMessagesRead(sender: String? = nil, read: Bool = true) {
+        readMessageIDs = SMSReadPolicy.updating(readMessageIDs, messages: messages, sender: sender, read: read)
+        UserDefaults.standard.set(Array(readMessageIDs), forKey: "airsim.sms-read-ids")
+    }
+
     @Published var numberInput = ""
     @Published var isOnline = false
     @Published private(set) var isReconnecting = false
@@ -611,6 +623,7 @@ final class AppModel: ObservableObject {
 
     func didEnterBackground() {
         appIsActive = false
+        audio.updateIncomingVibration(call: nil, inApp: false)
         cloudStatusRefreshTask?.cancel()
         cloudStatusRefreshTask = nil
         cloudStatusRefreshGeneration &+= 1
@@ -888,6 +901,8 @@ final class AppModel: ObservableObject {
                     appIsActive: appIsActive
                 )
             }
+            audio.updateIncomingVibration(call: lifecycleCall,
+                inApp: appIsActive && callPresentationSurface == .app)
             if lifecycleCall?.direction == "incoming", callKit.suppressesInAppIncomingRingtone {
                 // CallKit 已负责系统铃声，不能再叠加应用内铃声。
                 audio.stopCallTone()
@@ -1013,7 +1028,8 @@ final class AppModel: ObservableObject {
             }
             if isOnline { isOnline = false }
             lastSuccessfulLocalAPI = nil
-            audio.stopCallTone()
+            audio.updateIncomingVibration(call: nil, inApp: false)
+        audio.stopCallTone()
             await awaitCloudStatusForLiveActivity(call: nil)
             let cloudStatus = CloudModePreference.isEnabled() &&
                 Date().timeIntervalSince(lastCloudStatusRefresh) <= 90
@@ -1267,6 +1283,7 @@ final class AppModel: ObservableObject {
 
     func answer() async {
         beginCallTransitionProtection()
+        audio.updateIncomingVibration(call: nil, inApp: false)
         audio.stopCallTone()
         callPresentationSurface = .app
         applyCurrentCallIntent(.connecting, source: .app)
@@ -1315,6 +1332,7 @@ final class AppModel: ObservableObject {
 
     func reject() async {
         beginCallTransitionProtection()
+        audio.updateIncomingVibration(call: nil, inApp: false)
         audio.stopCallTone()
         applyCurrentCallIntent(.ending, source: .app)
         if callKit.managesCurrentCall {
@@ -1332,6 +1350,7 @@ final class AppModel: ObservableObject {
 
     func hangup() async {
         beginCallTransitionProtection()
+        audio.updateIncomingVibration(call: nil, inApp: false)
         audio.stopCallTone()
         applyCurrentCallIntent(.ending, source: .app)
         if callKit.managesCurrentCall {
@@ -1572,6 +1591,8 @@ final class AppModel: ObservableObject {
             return
         }
         messages = []
+        readMessageIDs = []
+        UserDefaults.standard.removeObject(forKey: "airsim.sms-read-ids")
         errorMessage = nil
     }
 
@@ -1595,6 +1616,11 @@ final class AppModel: ObservableObject {
         }
 
         let storedMessages = historyStore.loadMessages()
+        if !UserDefaults.standard.bool(forKey: "airsim.sms-read-migrated") {
+            readMessageIDs.formUnion(storedMessages.map(\.id))
+            UserDefaults.standard.set(Array(readMessageIDs), forKey: "airsim.sms-read-ids")
+            UserDefaults.standard.set(true, forKey: "airsim.sms-read-migrated")
+        }
         if !storedMessages.isEmpty {
             var messagesByID: [String: SMSMessage] = [:]
             for message in messages { messagesByID[message.id] = message }
@@ -1737,7 +1763,8 @@ final class AppModel: ObservableObject {
             }
             let pcmRoute = currentPCMRoute ?? Self.pcmRoute(for: localAPI.route)
             // Prefer carrier ringback/announcements over the app's synthetic waiting tone.
-            audio.stopCallTone()
+            audio.updateIncomingVibration(call: nil, inApp: false)
+        audio.stopCallTone()
             // 先完成麦克风授权和 AVAudioEngine 启动，再让 Agent 开始等待 PCM
             // 客户端。否则首次授权停留超过 Agent 的等待窗口时，helper 会被提前杀死。
             let outcome = try await LocalCallAudioStartupCoordinator.start(
@@ -2143,6 +2170,7 @@ extension AppModel: CallKitActionHandling {
     func callKitStart(number: String) async throws {
         beginCallTransitionProtection()
         if callPresentationSurface == nil { callPresentationSurface = .system }
+        audio.updateIncomingVibration(call: nil, inApp: false)
         audio.stopCallTone()
         backgroundStandby.suspendForCall()
         do {
@@ -2195,6 +2223,7 @@ extension AppModel: CallKitActionHandling {
 
     func callKitAnswer(origin: CallAnswerOrigin) async throws {
         beginCallTransitionProtection()
+        audio.updateIncomingVibration(call: nil, inApp: false)
         audio.stopCallTone()
         backgroundStandby.suspendForCall()
         audio.resetSpeakerPreferenceForNewCall()
@@ -2265,6 +2294,7 @@ extension AppModel: CallKitActionHandling {
 
     func callKitEnd() async throws {
         beginCallTransitionProtection()
+        audio.updateIncomingVibration(call: nil, inApp: false)
         audio.stopCallTone()
         let pushedCall = callKit.currentIncomingPush
         let endRoute = CallKitEndDecision.route(

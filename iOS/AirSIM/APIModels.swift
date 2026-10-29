@@ -13,8 +13,25 @@ struct CallRecord: Codable, Equatable, Sendable, Identifiable {
     let updatedAt: Date
     let endedAt: Date?
     let missed: Bool
+    /// Optional for compatibility with existing saved records and older agents.
+    var connectedAt: Date? = nil
+    var wasConnected: Bool? = nil
+
+    var isUnanswered: Bool { missed || (endedAt != nil && wasConnected == false) }
+    var outcomeTitle: String {
+        if missed { return "未接来电" }
+        if endedAt != nil, wasConnected == false {
+            return direction == "incoming" ? "未接来电" : "呼出未接通"
+        }
+        if wasConnected == true || connectedAt != nil {
+            return direction == "incoming" ? "已接来电" : "呼出已接通"
+        }
+        return direction == "incoming" ? "呼入" : "呼出"
+    }
 
     enum CodingKeys: String, CodingKey {
+        case connectedAt = "connected_at"
+        case wasConnected = "was_connected"
         case id, index, direction, state, number, missed
         case startedAt = "started_at"
         case updatedAt = "updated_at"
@@ -201,6 +218,17 @@ struct SMSMessage: Codable, Equatable, Sendable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case sender, content, code, timestamp, direction
         case deliveryID = "delivery_id"
+    }
+}
+
+enum SMSReadPolicy {
+    static func isUnread(_ message: SMSMessage, readIDs: Set<String>) -> Bool {
+        !message.isOutgoing && !readIDs.contains(message.id)
+    }
+
+    static func updating(_ readIDs: Set<String>, messages: [SMSMessage], sender: String?, read: Bool) -> Set<String> {
+        let ids = Set(messages.filter { !$0.isOutgoing && (sender == nil || $0.sender == sender) }.map(\.id))
+        return read ? readIDs.union(ids) : readIDs.subtracting(ids)
     }
 }
 

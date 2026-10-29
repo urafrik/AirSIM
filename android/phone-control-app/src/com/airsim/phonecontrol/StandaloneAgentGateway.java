@@ -271,6 +271,8 @@ final class StandaloneAgentGateway {
             String state = event.optString("state", "");
             if ("ended".equals(state)) {
                 if (activeCall != null) {
+                    activeCall.put("missed", "incoming".equals(activeCall.optString("direction"))
+                            && !activeCall.optBoolean("was_connected", false));
                     activeCall.put("state", "ended").put("ended_at", Instant.now().toString())
                             .put("updated_at", Instant.now().toString());
                     callHistory.put(activeCall);
@@ -280,7 +282,12 @@ final class StandaloneAgentGateway {
                 if (activeCall == null || !event.optString("call_id").equals(activeCall.optString("android_id"))) {
                     activeCall = new JSONObject().put("id", "android-" + System.currentTimeMillis())
                             .put("android_id", event.optString("call_id")).put("index", 1)
-                            .put("started_at", Instant.now().toString()).put("missed", false);
+                            .put("started_at", Instant.now().toString()).put("missed", false)
+                            .put("was_connected", false);
+                }
+                if ("active".equals(state) || "holding".equals(state)) {
+                    activeCall.put("was_connected", true);
+                    if (!activeCall.has("connected_at")) activeCall.put("connected_at", Instant.now().toString());
                 }
                 activeCall.put("direction", event.optString("direction"))
                         .put("state", state).put("number", event.optString("number"))

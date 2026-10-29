@@ -101,6 +101,7 @@ struct AirSIMSettingsView: View {
     @State private var udpKey = ""
     @State private var udpMessage: String?
     @State private var directMessage: String?
+    @AppStorage("airsim.incoming-vibration") private var incomingVibration = true
     @State private var recordings: [URL] = []
     @State private var message: String?
     @State private var selfTestPhase: SelfTestPhase = .idle
@@ -114,6 +115,12 @@ struct AirSIMSettingsView: View {
                     LabeledContent("连接方式", value: cloudRelayEnabled ? "直连优先，云端备用" : "安卓直连")
                 } footer: {
                     Text("安卓直连支持局域网和 frp 外网连接。你目前的 frp 方案无需启用云端中继；云端关闭时不能保证锁屏后台来电唤醒。")
+                }
+
+                Section {
+                    Toggle("来电震动", isOn: $incomingVibration)
+                } header: { Text("来电提醒") } footer: {
+                    Text("控制应用内来电震动。系统来电界面的震动由 iPhone“设置 → 声音与触感”控制；此开关不影响系统来电触感。")
                 }
 
                 Section("当前连接") {

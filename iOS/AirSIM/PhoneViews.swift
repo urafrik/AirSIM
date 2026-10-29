@@ -533,6 +533,10 @@ struct RecentsView: View {
     @EnvironmentObject private var contacts: ContactStore
     let onCall: (String) -> Void
     let onMessage: (String) -> Void
+    @State private var missedOnly = false
+    private var filteredCalls: [CallRecord] {
+        missedOnly ? model.callHistory.filter { $0.direction == "incoming" && $0.isUnanswered } : model.callHistory
+    }
     @State private var selectedCall: CallRecord?
     @State private var suppressNextCallTap = false
 
@@ -540,13 +544,13 @@ struct RecentsView: View {
         ZStack {
             NavigationStack {
                 Group {
-                    if model.callHistory.isEmpty {
+                    if filteredCalls.isEmpty {
                         EmptyStateView(
                             title: L10n.t("暂无通话记录"),
                             systemImage: "phone.arrow.up.right"
                         )
                     } else {
-                        List(model.callHistory) { call in
+                        List(filteredCalls) { call in
                             let contact = call.number.flatMap { contacts.contact(for: $0) }
                             Button {
                                 if suppressNextCallTap {
@@ -608,6 +612,14 @@ struct RecentsView: View {
                 }
                 .background(PhoneBackdrop())
                 .navigationTitle(L10n.t("最近通话"))
+                .toolbar {
+                    ToolbarItem(placement: .principal) {
+                        Picker("通话筛选", selection: $missedOnly) {
+                            Text("全部").tag(false)
+                            Text("未接来电").tag(true)
+                        }.pickerStyle(.segmented).frame(maxWidth: 220)
+                    }
+                }
             }
             .allowsHitTesting(selectedCall == nil)
 
@@ -644,6 +656,9 @@ struct RecentsView: View {
                 Text(number)
                     .font(.subheadline.monospacedDigit())
                     .foregroundStyle(.secondary)
+                Text(L10n.t(call.outcomeTitle))
+                    .font(.subheadline)
+                    .foregroundStyle(call.isUnanswered ? .red : .secondary)
                 Text(RecentCallTimeFormatter.string(for: call.startedAt))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -703,14 +718,14 @@ struct RecentsView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(displayName)
                         .font(.body.weight(.semibold))
-                        .foregroundStyle(call.missed ? .red : .primary)
+                        .foregroundStyle(call.isUnanswered ? .red : .primary)
                     HStack(spacing: 4) {
                         Image(systemName: call.direction == "incoming" ? "arrow.down.left" : "arrow.up.right")
                             .font(.caption2.weight(.semibold))
-                        Text(call.missed ? L10n.t("未接") : "AirSIM 音频")
+                        Text(L10n.t(call.outcomeTitle))
                     }
                     .font(.subheadline)
-                    .foregroundStyle(call.missed ? .red : .secondary)
+                    .foregroundStyle(call.isUnanswered ? .red : .secondary)
                 }
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -761,6 +776,13 @@ struct MessagesView: View {
                             MessageConversationRow(sender: conversation.sender, messages: conversation.messages)
                                 .contentShape(Rectangle())
                         }
+                        .swipeActions(edge: .leading) {
+                            Button {
+                                model.setMessagesRead(sender: conversation.sender, read: conversation.messages.contains { model.isMessageUnread($0) })
+                            } label: {
+                                Label(conversation.messages.contains { model.isMessageUnread($0) } ? "标为已读" : "标为未读", systemImage: "envelope.badge")
+                            }.tint(.blue)
+                        }
                         .listRowBackground(Color.clear)
                         .listRowInsets(.init(
                             top: 0,
@@ -786,6 +808,7 @@ struct MessagesView: View {
             .toolbar {
                 phoneMorphingToolbarItem(placement: .topBarLeading, id: "top-action-leading-more") {
                     Menu {
+                        Button("全部标为已读") { model.setMessagesRead() }
                         Button { Task { await model.refreshMessages() } } label: {
                             Label(L10n.t("刷新"), systemImage: "arrow.clockwise")
                         }
@@ -872,8 +895,12 @@ struct MessagesView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                Text(messages.last?.timestamp ?? .now, style: .time)
-                    .font(.subheadline)
+                if messages.contains(where: { model.isMessageUnread($0) }) {
+                    Circle().fill(.blue).frame(width: 9, height: 9)
+                        .accessibilityLabel("未读短信")
+                }
+                Text(messages.last?.timestamp ?? .now, format: .dateTime.month().day().hour().minute())
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .frame(width: PhoneListMetrics.timeColumnWidth, alignment: .trailing)
@@ -887,6 +914,8 @@ private struct MessageThreadView: View {
     @EnvironmentObject private var model: AppModel
     let sender: String
     @State private var reply = ""
+    @State private var threadVisible = false
+    @Environment(\.scenePhase) private var scenePhase
 
     private var messages: [SMSMessage] {
         model.messages
@@ -924,11 +953,12 @@ private struct MessageThreadView: View {
                                                 Label("复制短信", systemImage: "doc.on.doc")
                                             }
                                         }
-                                    if message.isOutgoing {
-                                        Text(L10n.t("已发送"))
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
-                                    }
+                                    Text(message.timestamp, format: .dateTime.year().month().day().hour().minute().second())
+                                        .font(.caption2.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                    Text(message.isOutgoing ? L10n.t("已发送") : (model.isMessageUnread(message) ? "未读" : "已读"))
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
                                 }
                                 if !message.isOutgoing { Spacer(minLength: 48) }
                             }
@@ -956,6 +986,17 @@ private struct MessageThreadView: View {
         }
         .navigationTitle(model.contacts.displayName(for: sender))
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            threadVisible = true
+            if scenePhase == .active { model.setMessagesRead(sender: sender) }
+        }
+        .onDisappear { threadVisible = false }
+        .onChange(of: messages.map(\.id)) { _ in
+            if threadVisible && scenePhase == .active { model.setMessagesRead(sender: sender) }
+        }
+        .onChange(of: scenePhase) { phase in
+            if threadVisible && phase == .active { model.setMessagesRead(sender: sender) }
+        }
     }
 }
 
