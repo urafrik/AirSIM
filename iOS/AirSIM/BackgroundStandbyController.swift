@@ -285,11 +285,7 @@ final class AirSIMNotificationDelegate: NSObject, UIApplicationDelegate, @precon
         guard !pushed.contentTruncated else { return false }
         var messages = historyStore.loadMessages()
         guard !messages.contains(where: { $0.deliveryID == pushed.deliveryID }) else { return false }
-        messages.append(pushed.message)
-        messages.sort { $0.timestamp > $1.timestamp }
-        if messages.count > 2_000 {
-            messages = Array(messages.prefix(2_000))
-        }
+        messages = AndroidHistoryMerge.messages(local: messages, imported: [pushed.message])
         return historyStore.saveMessages(messages)
     }
 }

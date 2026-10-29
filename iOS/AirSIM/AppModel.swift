@@ -314,7 +314,6 @@ final class AppModel: ObservableObject {
     private var lowPowerModeEnabled = true
     private let backgroundStandbyKey = "airsim.background-standby-enabled"
     private let lowPowerModeKey = "airsim.low-power-mode-enabled"
-    private let maxCallHistoryCount = 500
     private let maxMessageCount = 2_000
 
     var inAppPresentedCall: CallRecord? {
